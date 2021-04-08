@@ -1,0 +1,98 @@
+   1               		.file	"main.c"
+   2               	__SP_H__ = 0x3e
+   3               	__SP_L__ = 0x3d
+   4               	__SREG__ = 0x3f
+   5               	__tmp_reg__ = 0
+   6               	__zero_reg__ = 1
+   7               		.text
+   8               	.Ltext0:
+   9               		.cfi_sections	.debug_frame
+  10               		.section	.rodata.str1.1,"aMS",@progbits,1
+  11               	.LC0:
+  12 0000 4865 6C6C 		.string	"Hello!"
+  12      6F21 00
+  13               		.section	.text.startup,"ax",@progbits
+  14               	.global	main
+  16               	main:
+  17               	.LFB1:
+  18               		.file 1 "main.c"
+   1:main.c        **** #include <avr/io.h>
+   2:main.c        **** #include "video.h"
+   3:main.c        **** 
+   4:main.c        **** int main(void)
+   5:main.c        **** {
+  19               		.loc 1 5 1 view -0
+  20               		.cfi_startproc
+  21               	/* prologue: function */
+  22               	/* frame size = 0 */
+  23               	/* stack size = 0 */
+  24               	.L__stack_usage = 0
+   6:main.c        **** 	video_begin(NTSC);
+  25               		.loc 1 6 2 view .LVU1
+  26 0000 80E0      		ldi r24,0
+  27 0002 0E94 0000 		call video_begin
+  28               	.LVL0:
+   7:main.c        **** 	video_clear();
+  29               		.loc 1 7 2 view .LVU2
+  30 0006 0E94 0000 		call video_clear
+  31               	.LVL1:
+   8:main.c        **** 	video_rect(20, 20, 40, 40);
+  32               		.loc 1 8 2 view .LVU3
+  33 000a 28E2      		ldi r18,lo8(40)
+  34 000c 48E2      		ldi r20,lo8(40)
+  35 000e 64E1      		ldi r22,lo8(20)
+  36 0010 84E1      		ldi r24,lo8(20)
+  37 0012 0E94 0000 		call video_rect
+  38               	.LVL2:
+   9:main.c        **** 	video_line(0, 95, 127, 0);
+  39               		.loc 1 9 2 view .LVU4
+  40 0016 30E0      		ldi r19,0
+  41 0018 20E0      		ldi r18,0
+  42 001a 4FE7      		ldi r20,lo8(127)
+  43 001c 50E0      		ldi r21,0
+  44 001e 6FE5      		ldi r22,lo8(95)
+  45 0020 70E0      		ldi r23,0
+  46 0022 90E0      		ldi r25,0
+  47 0024 80E0      		ldi r24,0
+  48 0026 0E94 0000 		call video_line
+  49               	.LVL3:
+  10:main.c        **** 	video_string(10, 70, "Hello!");
+  50               		.loc 1 10 2 view .LVU5
+  51 002a 40E0      		ldi r20,lo8(.LC0)
+  52 002c 50E0      		ldi r21,hi8(.LC0)
+  53 002e 66E4      		ldi r22,lo8(70)
+  54 0030 8AE0      		ldi r24,lo8(10)
+  55 0032 0E94 0000 		call video_string
+  56               	.LVL4:
+  57               	.L2:
+  11:main.c        **** 
+  12:main.c        **** 	for(;;)
+  58               		.loc 1 12 2 discriminator 1 view .LVU6
+  13:main.c        **** 	{
+  14:main.c        **** 		
+  15:main.c        **** 	}
+  59               		.loc 1 15 2 discriminator 1 view .LVU7
+  12:main.c        **** 	{
+  60               		.loc 1 12 7 discriminator 1 view .LVU8
+  61 0036 00C0      		rjmp .L2
+  62               		.cfi_endproc
+  63               	.LFE1:
+  65               		.text
+  66               	.Letext0:
+  67               		.file 2 "video.h"
+DEFINED SYMBOLS
+                            *ABS*:0000000000000000 main.c
+     /tmp/ccPHQRKW.s:2      *ABS*:000000000000003e __SP_H__
+     /tmp/ccPHQRKW.s:3      *ABS*:000000000000003d __SP_L__
+     /tmp/ccPHQRKW.s:4      *ABS*:000000000000003f __SREG__
+     /tmp/ccPHQRKW.s:5      *ABS*:0000000000000000 __tmp_reg__
+     /tmp/ccPHQRKW.s:6      *ABS*:0000000000000001 __zero_reg__
+     /tmp/ccPHQRKW.s:16     .text.startup:0000000000000000 main
+
+UNDEFINED SYMBOLS
+video_begin
+video_clear
+video_rect
+video_line
+video_string
+__do_copy_data

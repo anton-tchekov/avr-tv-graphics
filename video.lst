@@ -1,0 +1,4025 @@
+   1               		.file	"video.c"
+   2               	__SP_H__ = 0x3e
+   3               	__SP_L__ = 0x3d
+   4               	__SREG__ = 0x3f
+   5               	__tmp_reg__ = 0
+   6               	__zero_reg__ = 1
+   7               		.text
+   8               	.Ltext0:
+   9               		.cfi_sections	.debug_frame
+  11               	blank_line:
+  12               	.LFB17:
+  13               		.file 1 "video.c"
+   1:video.c       **** #include "video.h"
+   2:video.c       **** 
+   3:video.c       **** extern const uint8_t font5x7[] PROGMEM;
+   4:video.c       **** 
+   5:video.c       **** static void active_line(void);
+   6:video.c       **** static void vsync_line(void);
+   7:video.c       **** static void blank_line(void);
+   8:video.c       **** 
+   9:video.c       **** volatile int scanLine;
+  10:video.c       **** int renderLine, lines_frame;
+  11:video.c       **** char vscale_const, vscale, vsync_end;
+  12:video.c       **** uint8_t frame[WIDTH * HEIGHT];
+  13:video.c       **** uint8_t start_render, output_delay, video_color = 0;
+  14:video.c       **** void (*line_handler)(void);
+  15:video.c       **** 
+  16:video.c       **** int16_t abs(int16_t v)
+  17:video.c       **** {
+  18:video.c       **** 	return (v < 0) ? (v * -1) : v;
+  19:video.c       **** }
+  20:video.c       **** 
+  21:video.c       **** void video_begin(uint8_t mode)
+  22:video.c       **** {
+  23:video.c       **** 	VID_DDR |= (1 << VID_PIN);
+  24:video.c       **** 	VID_PORT &= ~(1 << VID_PIN);
+  25:video.c       **** 	SYNC_DDR |= (1 << SYNC_PIN);
+  26:video.c       **** 	SYNC_PORT |= (1 << SYNC_PIN);
+  27:video.c       **** 
+  28:video.c       **** 	TCCR1A = (1 << COM1A1) | (1 << COM1A0) | (1 << WGM11);
+  29:video.c       **** 	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS10);
+  30:video.c       **** 
+  31:video.c       **** 	if(mode)
+  32:video.c       **** 	{
+  33:video.c       **** 		vscale_const = VSCALE_PAL;
+  34:video.c       **** 		start_render = START_RENDER_PAL;
+  35:video.c       **** 		output_delay = PAL_CYCLES_OUTPUT_START;
+  36:video.c       **** 		vsync_end = PAL_LINE_STOP_VSYNC;
+  37:video.c       **** 		lines_frame = PAL_LINE_FRAME;
+  38:video.c       **** 		ICR1 = PAL_CYCLES_SCANLINE;
+  39:video.c       **** 	}
+  40:video.c       **** 	else
+  41:video.c       **** 	{
+  42:video.c       **** 		vscale_const = VSCALE_NTSC;
+  43:video.c       **** 		start_render = START_RENDER_NTSC;
+  44:video.c       **** 		output_delay = NTSC_CYCLES_OUTPUT_START;
+  45:video.c       **** 		vsync_end = NTSC_LINE_STOP_VSYNC;
+  46:video.c       **** 		lines_frame = NTSC_LINE_FRAME;
+  47:video.c       **** 		ICR1 = NTSC_CYCLES_SCANLINE;
+  48:video.c       **** 	}
+  49:video.c       **** 
+  50:video.c       **** 	vscale = vscale_const;
+  51:video.c       **** 	OCR1A = CYCLES_HORZ_SYNC;
+  52:video.c       **** 	scanLine = lines_frame + 1;
+  53:video.c       **** 	line_handler = &vsync_line;
+  54:video.c       **** 	TIMSK1 = (1 << TOIE1);
+  55:video.c       **** 	sei();
+  56:video.c       **** }
+  57:video.c       **** 
+  58:video.c       **** void video_sp(uint8_t x, uint8_t y)
+  59:video.c       **** {
+  60:video.c       **** 	switch(video_color)
+  61:video.c       **** 	{
+  62:video.c       **** 		case 0:
+  63:video.c       **** 		{
+  64:video.c       **** 			frame[(x >> 3) + (y * WIDTH)] &= (~0x80 >> (x & 7));
+  65:video.c       **** 			break;
+  66:video.c       **** 		}
+  67:video.c       **** 
+  68:video.c       **** 		case 1:
+  69:video.c       **** 		{
+  70:video.c       **** 			frame[(x >> 3) + (y * WIDTH)] |= (0x80 >> (x & 7));
+  71:video.c       **** 			break;
+  72:video.c       **** 		}
+  73:video.c       **** 
+  74:video.c       **** 		case 2:
+  75:video.c       **** 		{
+  76:video.c       **** 			frame[(x >> 3) + (y * WIDTH)] ^= (0x80 >> (x & 7));
+  77:video.c       **** 			break;
+  78:video.c       **** 		}
+  79:video.c       **** 	}
+  80:video.c       **** }
+  81:video.c       **** 
+  82:video.c       **** void video_set_color(uint8_t color)
+  83:video.c       **** {
+  84:video.c       **** 	video_color = color;
+  85:video.c       **** }
+  86:video.c       **** 
+  87:video.c       **** void video_set_pixel(uint8_t x, uint8_t y)
+  88:video.c       **** {
+  89:video.c       **** 	if(x < PWIDTH && y < HEIGHT)
+  90:video.c       **** 	{
+  91:video.c       **** 		video_sp(x, y);
+  92:video.c       **** 	}
+  93:video.c       **** }
+  94:video.c       **** 
+  95:video.c       **** uint8_t video_get_pixel(uint8_t x, uint8_t y)
+  96:video.c       **** {
+  97:video.c       **** 	return(x < PWIDTH && y < HEIGHT &&
+  98:video.c       **** 			(frame[x / 8 + y * WIDTH] & (0x80 >> (x & 7))));
+  99:video.c       **** }
+ 100:video.c       **** 
+ 101:video.c       **** void video_clear(void)
+ 102:video.c       **** {
+ 103:video.c       **** 	uint16_t i;
+ 104:video.c       **** 	uint8_t val;
+ 105:video.c       **** 	switch(video_color)
+ 106:video.c       **** 	{
+ 107:video.c       **** 		case BLACK:
+ 108:video.c       **** 		{
+ 109:video.c       **** 			val = 0x00;
+ 110:video.c       **** 			break;
+ 111:video.c       **** 		}
+ 112:video.c       **** 
+ 113:video.c       **** 		case WHITE:
+ 114:video.c       **** 		{
+ 115:video.c       **** 			val = 0xFF;
+ 116:video.c       **** 			break;
+ 117:video.c       **** 		}
+ 118:video.c       **** 
+ 119:video.c       **** 		case INVERT:
+ 120:video.c       **** 		{
+ 121:video.c       **** 			for(i = 0; i < WIDTH * HEIGHT; ++i)
+ 122:video.c       **** 			{
+ 123:video.c       **** 				frame[i] = ~frame[i];
+ 124:video.c       **** 			}
+ 125:video.c       **** 		}
+ 126:video.c       **** 
+ 127:video.c       **** 		default:
+ 128:video.c       **** 		{
+ 129:video.c       **** 			return;
+ 130:video.c       **** 		}
+ 131:video.c       **** 	}
+ 132:video.c       **** 
+ 133:video.c       **** 	for(i = 0; i < WIDTH * HEIGHT; ++i)
+ 134:video.c       **** 	{
+ 135:video.c       **** 		frame[i] = val;
+ 136:video.c       **** 	}
+ 137:video.c       **** }
+ 138:video.c       **** 
+ 139:video.c       **** void video_rect(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1)
+ 140:video.c       **** {
+ 141:video.c       **** 	uint8_t ox = x0;
+ 142:video.c       **** 	if(x0 >= PWIDTH) { x0 = PWIDTH - 1; }
+ 143:video.c       **** 	if(y0 >= HEIGHT) { y0 = HEIGHT - 1; }
+ 144:video.c       **** 	if(x1 >= PWIDTH) { x1 = PWIDTH - 1; }
+ 145:video.c       **** 	if(y1 >= HEIGHT) { y1 = HEIGHT - 1; }
+ 146:video.c       **** 	while(y0 < y1)
+ 147:video.c       **** 	{
+ 148:video.c       **** 		while(x0 < x1)
+ 149:video.c       **** 		{
+ 150:video.c       **** 			video_sp(x0, y0);
+ 151:video.c       **** 			++x0;
+ 152:video.c       **** 		}
+ 153:video.c       **** 
+ 154:video.c       **** 		x0 = ox;
+ 155:video.c       **** 		++y0;
+ 156:video.c       **** 	}
+ 157:video.c       **** 
+ 158:video.c       **** 	frame[0] = 0xFF;
+ 159:video.c       **** }
+ 160:video.c       **** 
+ 161:video.c       **** void video_circle(int16_t x0, int16_t y0, int16_t radius)
+ 162:video.c       **** {
+ 163:video.c       **** 	int16_t x = radius - 1, y = 0, dx = 1, dy = 1,
+ 164:video.c       **** 	err = dx - (radius << 1);
+ 165:video.c       **** 	while(x >= y)
+ 166:video.c       **** 	{
+ 167:video.c       **** 		video_set_pixel(x0 + x, y0 + y);
+ 168:video.c       **** 		video_set_pixel(x0 + y, y0 + x);
+ 169:video.c       **** 		video_set_pixel(x0 - y, y0 + x);
+ 170:video.c       **** 		video_set_pixel(x0 - x, y0 + y);
+ 171:video.c       **** 		video_set_pixel(x0 - x, y0 - y);
+ 172:video.c       **** 		video_set_pixel(x0 - y, y0 - x);
+ 173:video.c       **** 		video_set_pixel(x0 + y, y0 - x);
+ 174:video.c       **** 		video_set_pixel(x0 + x, y0 - y);
+ 175:video.c       **** 
+ 176:video.c       **** 		if(err <= 0)
+ 177:video.c       **** 		{
+ 178:video.c       **** 			++y;
+ 179:video.c       **** 			err += dy;
+ 180:video.c       **** 			dy += 2;
+ 181:video.c       **** 		}
+ 182:video.c       **** 
+ 183:video.c       **** 		if(err > 0)
+ 184:video.c       **** 		{
+ 185:video.c       **** 			--x;
+ 186:video.c       **** 			dx += 2;
+ 187:video.c       **** 			err += dx - (radius << 1);
+ 188:video.c       **** 		}
+ 189:video.c       **** 	}
+ 190:video.c       **** }
+ 191:video.c       **** 
+ 192:video.c       **** void video_hline(uint8_t x, uint8_t y, uint8_t l)
+ 193:video.c       **** {
+ 194:video.c       **** 	uint8_t e;
+ 195:video.c       **** 	if(x < PWIDTH && y < HEIGHT && (e = x + l) < PWIDTH)
+ 196:video.c       **** 	{
+ 197:video.c       **** 		for(; x < e; ++x)
+ 198:video.c       **** 		{
+ 199:video.c       **** 			video_sp(x, y);
+ 200:video.c       **** 		}
+ 201:video.c       **** 	}
+ 202:video.c       **** }
+ 203:video.c       **** 
+ 204:video.c       **** void video_vline(uint8_t x, uint8_t y, uint8_t l)
+ 205:video.c       **** {
+ 206:video.c       **** 	uint8_t e;
+ 207:video.c       **** 	if(x < PWIDTH && y < HEIGHT && (e = y + l) < HEIGHT)
+ 208:video.c       **** 	{
+ 209:video.c       **** 		for(; y < e; ++y)
+ 210:video.c       **** 		{
+ 211:video.c       **** 			video_sp(x, y);
+ 212:video.c       **** 		}
+ 213:video.c       **** 	}
+ 214:video.c       **** }
+ 215:video.c       **** 
+ 216:video.c       **** void video_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1)
+ 217:video.c       **** {
+ 218:video.c       **** 	int16_t dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+ 219:video.c       **** 	int16_t dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+ 220:video.c       **** 	int16_t err = (dx > dy ? dx : -dy) / 2, e2;
+ 221:video.c       **** 	while(x0 != x1 && y0 != y1)
+ 222:video.c       **** 	{
+ 223:video.c       **** 		video_set_pixel(x0, y0);
+ 224:video.c       **** 
+ 225:video.c       **** 		e2 = err;
+ 226:video.c       **** 
+ 227:video.c       **** 		if(e2 > -dx)
+ 228:video.c       **** 		{
+ 229:video.c       **** 			err -= dy;
+ 230:video.c       **** 			x0 += sx;
+ 231:video.c       **** 		}
+ 232:video.c       **** 
+ 233:video.c       **** 		if(e2 < dy)
+ 234:video.c       **** 		{
+ 235:video.c       **** 			err += dx;
+ 236:video.c       **** 			y0 += sy;
+ 237:video.c       **** 		}
+ 238:video.c       **** 	}
+ 239:video.c       **** }
+ 240:video.c       **** 
+ 241:video.c       **** void video_char(uint8_t x, uint8_t y, char c)
+ 242:video.c       **** {
+ 243:video.c       **** 	uint8_t a, b, p, ex, ey;
+ 244:video.c       **** 	const uint8_t *v;
+ 245:video.c       **** 	a = y;
+ 246:video.c       **** 	ex = x + 5;
+ 247:video.c       **** 	ey = y + 7;
+ 248:video.c       **** 	v = font5x7 + 5 * (c - 32);
+ 249:video.c       **** 	if(ex < PWIDTH && ey < HEIGHT)
+ 250:video.c       **** 	{
+ 251:video.c       **** 		for(; x < ex; ++x, ++v)
+ 252:video.c       **** 		{
+ 253:video.c       **** 			p = pgm_read_byte(v);
+ 254:video.c       **** 			for(y = a, b = 1; y < ey; ++y, b <<= 1)
+ 255:video.c       **** 			{
+ 256:video.c       **** 				if(p & b)
+ 257:video.c       **** 				{
+ 258:video.c       **** 					video_sp(x, y);
+ 259:video.c       **** 				}
+ 260:video.c       **** 			}
+ 261:video.c       **** 		}
+ 262:video.c       **** 	}
+ 263:video.c       **** }
+ 264:video.c       **** 
+ 265:video.c       **** void video_string(uint8_t x, uint8_t y, char *s)
+ 266:video.c       **** {
+ 267:video.c       **** 	while(*s)
+ 268:video.c       **** 	{
+ 269:video.c       **** 		video_char(x, y, *s++);
+ 270:video.c       **** 		x += 6;
+ 271:video.c       **** 	}
+ 272:video.c       **** }
+ 273:video.c       **** 
+ 274:video.c       **** void video_bitmap
+ 275:video.c       **** (uint8_t *img, uint8_t x0, uint8_t y0, uint8_t x1, uint16_t len)
+ 276:video.c       **** {
+ 277:video.c       **** 	uint8_t *end, mask, sx = x0;
+ 278:video.c       **** 	for(end = img + len; img < end; ++img)
+ 279:video.c       **** 	{
+ 280:video.c       **** 		for(mask = 1; mask < 0x80; mask <<= 1)
+ 281:video.c       **** 		{
+ 282:video.c       **** 			if(*img & mask)
+ 283:video.c       **** 			{
+ 284:video.c       **** 				video_sp(x0, y0);
+ 285:video.c       **** 			}
+ 286:video.c       **** 
+ 287:video.c       **** 			if(++x0 == x1)
+ 288:video.c       **** 			{
+ 289:video.c       **** 				x0 = sx;
+ 290:video.c       **** 				++y0;
+ 291:video.c       **** 			}
+ 292:video.c       **** 		}
+ 293:video.c       **** 	}
+ 294:video.c       **** }
+ 295:video.c       **** 
+ 296:video.c       **** void video_shift(uint8_t distance, uint8_t dir)
+ 297:video.c       **** {
+ 298:video.c       **** 	switch(dir)
+ 299:video.c       **** 	{
+ 300:video.c       **** 		case UP:
+ 301:video.c       **** 		{
+ 302:video.c       **** 			uint8_t *src, *dst, *end;
+ 303:video.c       **** 			dst = frame;
+ 304:video.c       **** 			src = frame + distance * WIDTH;
+ 305:video.c       **** 			end = frame + HEIGHT * WIDTH;
+ 306:video.c       **** 			while(src <= end)
+ 307:video.c       **** 			{
+ 308:video.c       **** 				*dst = *src;
+ 309:video.c       **** 				*src = 0;
+ 310:video.c       **** 				++dst;
+ 311:video.c       **** 				++src;
+ 312:video.c       **** 			}
+ 313:video.c       **** 			break;
+ 314:video.c       **** 		}
+ 315:video.c       **** 
+ 316:video.c       **** 		case DOWN:
+ 317:video.c       **** 		{
+ 318:video.c       **** 			uint8_t *src, *dst, *end;
+ 319:video.c       **** 			dst = frame + HEIGHT * WIDTH;
+ 320:video.c       **** 			src = dst - distance * WIDTH;
+ 321:video.c       **** 			end = frame;
+ 322:video.c       **** 			while(src >= end)
+ 323:video.c       **** 			{
+ 324:video.c       **** 				*dst = *src;
+ 325:video.c       **** 				*src = 0;
+ 326:video.c       **** 				--dst;
+ 327:video.c       **** 				--src;
+ 328:video.c       **** 			}
+ 329:video.c       **** 			break;
+ 330:video.c       **** 		}
+ 331:video.c       **** 
+ 332:video.c       **** 		case LEFT:
+ 333:video.c       **** 		{
+ 334:video.c       **** 			uint8_t *src, *dst, *end, shift, tmp, line;
+ 335:video.c       **** 			shift = distance & 7;
+ 336:video.c       **** 			for(line = 0; line < HEIGHT; ++line)
+ 337:video.c       **** 			{
+ 338:video.c       **** 				dst = frame + WIDTH * line;
+ 339:video.c       **** 				src = dst + distance / 8;
+ 340:video.c       **** 				end = dst + WIDTH - 2;
+ 341:video.c       **** 				while(src <= end)
+ 342:video.c       **** 				{
+ 343:video.c       **** 					tmp = 0;
+ 344:video.c       **** 					tmp = *src << shift;
+ 345:video.c       **** 					*src = 0;
+ 346:video.c       **** 					++src;
+ 347:video.c       **** 					tmp |= *src >> (8 - shift);
+ 348:video.c       **** 					*dst = tmp;
+ 349:video.c       **** 					++dst;
+ 350:video.c       **** 				}
+ 351:video.c       **** 
+ 352:video.c       **** 				tmp = 0;
+ 353:video.c       **** 				tmp = *src << shift;
+ 354:video.c       **** 				*src = 0;
+ 355:video.c       **** 				*dst = tmp;
+ 356:video.c       **** 			}
+ 357:video.c       **** 			break;
+ 358:video.c       **** 		}
+ 359:video.c       **** 
+ 360:video.c       **** 		case RIGHT:
+ 361:video.c       **** 		{
+ 362:video.c       **** 			uint8_t *src, *dst, *end, shift, tmp, line;
+ 363:video.c       **** 			shift = distance & 7;
+ 364:video.c       **** 			for(line = 0; line < HEIGHT; ++line)
+ 365:video.c       **** 			{
+ 366:video.c       **** 				dst = frame + WIDTH - 1 + WIDTH * line;
+ 367:video.c       **** 				src = dst - distance / 8;
+ 368:video.c       **** 				end = dst - WIDTH + 2;
+ 369:video.c       **** 				while(src >= end)
+ 370:video.c       **** 				{
+ 371:video.c       **** 					tmp = 0;
+ 372:video.c       **** 					tmp = *src >> shift;
+ 373:video.c       **** 					*src = 0;
+ 374:video.c       **** 					--src;
+ 375:video.c       **** 					tmp |= *src << (8 - shift);
+ 376:video.c       **** 					*dst = tmp;
+ 377:video.c       **** 					--dst;
+ 378:video.c       **** 				}
+ 379:video.c       **** 
+ 380:video.c       **** 				tmp = 0;
+ 381:video.c       **** 				tmp = *src >> shift;
+ 382:video.c       **** 				*src = 0;
+ 383:video.c       **** 				*dst = tmp;
+ 384:video.c       **** 			}
+ 385:video.c       **** 			break;
+ 386:video.c       **** 		}
+ 387:video.c       **** 	}
+ 388:video.c       **** }
+ 389:video.c       **** 
+ 390:video.c       **** static void blank_line(void)
+ 391:video.c       **** {
+  14               		.loc 1 391 1 view -0
+  15               		.cfi_startproc
+  16               	/* prologue: function */
+  17               	/* frame size = 0 */
+  18               	/* stack size = 0 */
+  19               	.L__stack_usage = 0
+ 392:video.c       **** 	if(scanLine == start_render)
+  20               		.loc 1 392 2 view .LVU1
+  21               		.loc 1 392 14 is_stmt 0 view .LVU2
+  22 0000 8091 0000 		lds r24,scanLine
+  23 0004 9091 0000 		lds r25,scanLine+1
+  24 0008 2091 0000 		lds r18,start_render
+  25               		.loc 1 392 4 view .LVU3
+  26 000c 2817      		cp r18,r24
+  27 000e 1906      		cpc __zero_reg__,r25
+  28 0010 01F4      		brne .L2
+ 393:video.c       **** 	{
+ 394:video.c       **** 		renderLine = 0;
+  29               		.loc 1 394 3 is_stmt 1 view .LVU4
+  30               		.loc 1 394 14 is_stmt 0 view .LVU5
+  31 0012 1092 0000 		sts renderLine+1,__zero_reg__
+  32 0016 1092 0000 		sts renderLine,__zero_reg__
+ 395:video.c       **** 		vscale = vscale_const;
+  33               		.loc 1 395 3 is_stmt 1 view .LVU6
+  34               		.loc 1 395 10 is_stmt 0 view .LVU7
+  35 001a 8091 0000 		lds r24,vscale_const
+  36 001e 8093 0000 		sts vscale,r24
+ 396:video.c       **** 		line_handler = &active_line;
+  37               		.loc 1 396 3 is_stmt 1 view .LVU8
+  38               		.loc 1 396 16 is_stmt 0 view .LVU9
+  39 0022 80E0      		ldi r24,lo8(gs(active_line))
+  40 0024 90E0      		ldi r25,hi8(gs(active_line))
+  41               	.L4:
+ 397:video.c       **** 	}
+ 398:video.c       **** 	else if(scanLine == lines_frame)
+ 399:video.c       **** 	{
+ 400:video.c       **** 		line_handler = &vsync_line;
+  42               		.loc 1 400 16 view .LVU10
+  43 0026 9093 0000 		sts line_handler+1,r25
+  44 002a 8093 0000 		sts line_handler,r24
+  45               	.L3:
+ 401:video.c       **** 	}
+ 402:video.c       **** 
+ 403:video.c       **** 	++scanLine;
+  46               		.loc 1 403 2 is_stmt 1 view .LVU11
+  47 002e 8091 0000 		lds r24,scanLine
+  48 0032 9091 0000 		lds r25,scanLine+1
+  49 0036 0196      		adiw r24,1
+  50 0038 9093 0000 		sts scanLine+1,r25
+  51 003c 8093 0000 		sts scanLine,r24
+  52               	/* epilogue start */
+ 404:video.c       **** }
+  53               		.loc 1 404 1 is_stmt 0 view .LVU12
+  54 0040 0895      		ret
+  55               	.L2:
+ 398:video.c       **** 	{
+  56               		.loc 1 398 7 is_stmt 1 view .LVU13
+ 398:video.c       **** 	{
+  57               		.loc 1 398 19 is_stmt 0 view .LVU14
+  58 0042 2091 0000 		lds r18,scanLine
+  59 0046 3091 0000 		lds r19,scanLine+1
+ 398:video.c       **** 	{
+  60               		.loc 1 398 9 view .LVU15
+  61 004a 8091 0000 		lds r24,lines_frame
+  62 004e 9091 0000 		lds r25,lines_frame+1
+  63 0052 2817      		cp r18,r24
+  64 0054 3907      		cpc r19,r25
+  65 0056 01F4      		brne .L3
+ 400:video.c       **** 	}
+  66               		.loc 1 400 3 is_stmt 1 view .LVU16
+ 400:video.c       **** 	}
+  67               		.loc 1 400 16 is_stmt 0 view .LVU17
+  68 0058 80E0      		ldi r24,lo8(gs(vsync_line))
+  69 005a 90E0      		ldi r25,hi8(gs(vsync_line))
+  70 005c 00C0      		rjmp .L4
+  71               		.cfi_endproc
+  72               	.LFE17:
+  75               	vsync_line:
+  76               	.LFB18:
+ 405:video.c       **** 
+ 406:video.c       **** static void vsync_line(void)
+ 407:video.c       **** {
+  77               		.loc 1 407 1 is_stmt 1 view -0
+  78               		.cfi_startproc
+  79               	/* prologue: function */
+  80               	/* frame size = 0 */
+  81               	/* stack size = 0 */
+  82               	.L__stack_usage = 0
+ 408:video.c       **** 	if(scanLine >= lines_frame)
+  83               		.loc 1 408 2 view .LVU19
+  84               		.loc 1 408 14 is_stmt 0 view .LVU20
+  85 005e 2091 0000 		lds r18,scanLine
+  86 0062 3091 0000 		lds r19,scanLine+1
+  87               		.loc 1 408 4 view .LVU21
+  88 0066 8091 0000 		lds r24,lines_frame
+  89 006a 9091 0000 		lds r25,lines_frame+1
+  90 006e 2817      		cp r18,r24
+  91 0070 3907      		cpc r19,r25
+  92 0072 04F0      		brlt .L6
+ 409:video.c       **** 	{
+ 410:video.c       **** 		OCR1A = CYCLES_VIRT_SYNC;
+  93               		.loc 1 410 3 is_stmt 1 view .LVU22
+  94               		.loc 1 410 9 is_stmt 0 view .LVU23
+  95 0074 8CEA      		ldi r24,lo8(-84)
+  96 0076 93E0      		ldi r25,lo8(3)
+  97 0078 9093 8900 		sts 136+1,r25
+  98 007c 8093 8800 		sts 136,r24
+ 411:video.c       **** 		scanLine = 0;
+  99               		.loc 1 411 3 is_stmt 1 view .LVU24
+ 100               		.loc 1 411 12 is_stmt 0 view .LVU25
+ 101 0080 1092 0000 		sts scanLine+1,__zero_reg__
+ 102 0084 1092 0000 		sts scanLine,__zero_reg__
+ 103               	.L7:
+ 412:video.c       **** 	}
+ 413:video.c       **** 	else if(scanLine == vsync_end)
+ 414:video.c       **** 	{
+ 415:video.c       **** 		OCR1A = CYCLES_HORZ_SYNC;
+ 416:video.c       **** 		line_handler = &blank_line;
+ 417:video.c       **** 	}
+ 418:video.c       **** 
+ 419:video.c       **** 	++scanLine;
+ 104               		.loc 1 419 2 is_stmt 1 view .LVU26
+ 105 0088 8091 0000 		lds r24,scanLine
+ 106 008c 9091 0000 		lds r25,scanLine+1
+ 107 0090 0196      		adiw r24,1
+ 108 0092 9093 0000 		sts scanLine+1,r25
+ 109 0096 8093 0000 		sts scanLine,r24
+ 110               	/* epilogue start */
+ 420:video.c       **** }
+ 111               		.loc 1 420 1 is_stmt 0 view .LVU27
+ 112 009a 0895      		ret
+ 113               	.L6:
+ 413:video.c       **** 	{
+ 114               		.loc 1 413 7 is_stmt 1 view .LVU28
+ 413:video.c       **** 	{
+ 115               		.loc 1 413 19 is_stmt 0 view .LVU29
+ 116 009c 8091 0000 		lds r24,scanLine
+ 117 00a0 9091 0000 		lds r25,scanLine+1
+ 118 00a4 2091 0000 		lds r18,vsync_end
+ 413:video.c       **** 	{
+ 119               		.loc 1 413 9 view .LVU30
+ 120 00a8 2817      		cp r18,r24
+ 121 00aa 1906      		cpc __zero_reg__,r25
+ 122 00ac 01F4      		brne .L7
+ 415:video.c       **** 		line_handler = &blank_line;
+ 123               		.loc 1 415 3 is_stmt 1 view .LVU31
+ 415:video.c       **** 		line_handler = &blank_line;
+ 124               		.loc 1 415 9 is_stmt 0 view .LVU32
+ 125 00ae 8AE4      		ldi r24,lo8(74)
+ 126 00b0 90E0      		ldi r25,0
+ 127 00b2 9093 8900 		sts 136+1,r25
+ 128 00b6 8093 8800 		sts 136,r24
+ 416:video.c       **** 	}
+ 129               		.loc 1 416 3 is_stmt 1 view .LVU33
+ 416:video.c       **** 	}
+ 130               		.loc 1 416 16 is_stmt 0 view .LVU34
+ 131 00ba 80E0      		ldi r24,lo8(gs(blank_line))
+ 132 00bc 90E0      		ldi r25,hi8(gs(blank_line))
+ 133 00be 9093 0000 		sts line_handler+1,r25
+ 134 00c2 8093 0000 		sts line_handler,r24
+ 135 00c6 00C0      		rjmp .L7
+ 136               		.cfi_endproc
+ 137               	.LFE18:
+ 140               	active_line:
+ 141               	.LFB19:
+ 421:video.c       **** 
+ 422:video.c       **** static void active_line(void)
+ 423:video.c       **** {
+ 142               		.loc 1 423 1 is_stmt 1 view -0
+ 143               		.cfi_startproc
+ 144 00c8 0F93      		push r16
+ 145               	.LCFI0:
+ 146               		.cfi_def_cfa_offset 3
+ 147               		.cfi_offset 16, -2
+ 148 00ca CF93      		push r28
+ 149               	.LCFI1:
+ 150               		.cfi_def_cfa_offset 4
+ 151               		.cfi_offset 28, -3
+ 152 00cc DF93      		push r29
+ 153               	.LCFI2:
+ 154               		.cfi_def_cfa_offset 5
+ 155               		.cfi_offset 29, -4
+ 156               	/* prologue: function */
+ 157               	/* frame size = 0 */
+ 158               	/* stack size = 3 */
+ 159               	.L__stack_usage = 3
+ 424:video.c       **** 	__asm__ __volatile__
+ 160               		.loc 1 424 2 view .LVU36
+ 425:video.c       **** 	(
+ 426:video.c       **** 		"subi %[time], 10              \n"
+ 427:video.c       **** 		"sub  %[time], %[tcnt1l]       \n\t"
+ 428:video.c       **** 		"100:                          \n\t"
+ 429:video.c       **** 		"    subi %[time], 3           \n\t"
+ 430:video.c       **** 		"    brcc 100b                 \n\t"
+ 431:video.c       **** 		"    subi %[time], 0-3         \n\t"
+ 432:video.c       **** 		"    breq 101f                 \n\t"
+ 433:video.c       **** 		"    dec  %[time]              \n\t"
+ 434:video.c       **** 		"    breq 102f                 \n\t"
+ 435:video.c       **** 		"    rjmp 102f                 \n"
+ 436:video.c       **** 		"101:                          \n\t"
+ 437:video.c       **** 		"    nop                       \n"
+ 438:video.c       **** 		"102:                          \n"
+ 439:video.c       **** 		:: [time] "a" (output_delay), [tcnt1l] "a" (TCNT1L)
+ 161               		.loc 1 439 47 is_stmt 0 view .LVU37
+ 162 00ce 3091 8400 		lds r19,132
+ 424:video.c       **** 	__asm__ __volatile__
+ 163               		.loc 1 424 2 view .LVU38
+ 164 00d2 2091 0000 		lds r18,output_delay
+ 165               	/* #APP */
+ 166               	 ;  424 "video.c" 1
+ 167 00d6 2A50      		subi r18, 10              
+ 168 00d8 231B      	sub  r18, r19       
+ 169               		100:                          
+ 170 00da 2350      		    subi r18, 3           
+ 171 00dc 00F4      		    brcc 100b                 
+ 172 00de 2D5F      		    subi r18, 0-3         
+ 173 00e0 01F0      		    breq 101f                 
+ 174 00e2 2A95      		    dec  r18              
+ 175 00e4 01F0      		    breq 102f                 
+ 176 00e6 00C0      		    rjmp 102f                 
+ 177               	101:                          
+ 178 00e8 0000      		    nop                       
+ 179               	102:                          
+ 180               	
+ 181               	 ;  0 "" 2
+ 440:video.c       **** 	);
+ 441:video.c       **** 
+ 442:video.c       **** 	#if RMETHOD >= 6
+ 443:video.c       **** 
+ 444:video.c       **** 	__asm__ __volatile__
+ 445:video.c       **** 	(
+ 446:video.c       **** 		"ADD  r26, r28                 \n\t"
+ 447:video.c       **** 		"ADC  r27, r29                 \n\t"
+ 448:video.c       **** 		"in   r16, %[port]             \n\t"
+ 449:video.c       **** 		HWS_ANDI
+ 450:video.c       **** 		"rjmp enter6                     \n"
+ 451:video.c       **** 		"loop6:                        \n\t"
+ 452:video.c       **** 		"    bst  __tmp_reg__, 0       \n\t"
+ 453:video.c       **** 		HWS_BLD
+ 454:video.c       **** 		"    out  %[port],r16            \n"
+ 455:video.c       **** 		"enter6:                       \n\t"
+ 456:video.c       **** 		"    LD   __tmp_reg__, X+      \n\t"
+ 457:video.c       **** 		"    nop                       \n\t"
+ 458:video.c       **** 		"    bst  __tmp_reg__, 7       \n\t"
+ 459:video.c       **** 		HWS_BLD
+ 460:video.c       **** 		"    out  %[port], r16           \n"
+ 461:video.c       **** 		"    nop                       \n\t"
+ 462:video.c       **** 		"    nop                       \n\t"
+ 463:video.c       **** 		"    nop                       \n\t"
+ 464:video.c       **** 		"    bst  __tmp_reg__, 6       \n\t"
+ 465:video.c       **** 		HWS_BLD
+ 466:video.c       **** 		"    out  %[port], r16           \n"
+ 467:video.c       **** 		"    nop                       \n\t"
+ 468:video.c       **** 		"    nop                       \n\t"
+ 469:video.c       **** 		"    nop                       \n\t"
+ 470:video.c       **** 		"    bst  __tmp_reg__, 5       \n\t"
+ 471:video.c       **** 		HWS_BLD
+ 472:video.c       **** 		"    out  %[port], r16           \n"
+ 473:video.c       **** 		"    nop                       \n\t"
+ 474:video.c       **** 		"    nop                       \n\t"
+ 475:video.c       **** 		"    nop                       \n\t"
+ 476:video.c       **** 		"    bst  __tmp_reg__, 4       \n\t"
+ 477:video.c       **** 		HWS_BLD
+ 478:video.c       **** 		"    out  %[port], r16           \n"
+ 479:video.c       **** 		"    nop                       \n\t"
+ 480:video.c       **** 		"    nop                       \n\t"
+ 481:video.c       **** 		"    nop                       \n\t"
+ 482:video.c       **** 		"    bst  __tmp_reg__, 3       \n\t"
+ 483:video.c       **** 		HWS_BLD
+ 484:video.c       **** 		"    out  %[port], r16           \n"
+ 485:video.c       **** 		"    nop                       \n\t"
+ 486:video.c       **** 		"    nop                       \n\t"
+ 487:video.c       **** 		"    nop                       \n\t"
+ 488:video.c       **** 		"    bst  __tmp_reg__, 2       \n\t"
+ 489:video.c       **** 		HWS_BLD
+ 490:video.c       **** 		"    out  %[port], r16           \n"
+ 491:video.c       **** 		"    nop                       \n\t"
+ 492:video.c       **** 		"    nop                       \n\t"
+ 493:video.c       **** 		"    nop                       \n\t"
+ 494:video.c       **** 		"    bst  __tmp_reg__, 1       \n\t"
+ 495:video.c       **** 		HWS_BLD
+ 496:video.c       **** 		"    out  %[port], r16           \n"
+ 497:video.c       **** 		"    dec  %[hres]              \n\t"
+ 498:video.c       **** 		"    brne loop6                \n\t"
+ 499:video.c       **** 		"    nop                       \n\t"
+ 500:video.c       **** 		"    nop                       \n\t"
+ 501:video.c       **** 		"    bst  __tmp_reg__, 0       \n\t"
+ 502:video.c       **** 		HWS_BLD
+ 503:video.c       **** 		"    out  %[port], r16           \n"
+ 504:video.c       **** 		"    in   r16, %[port]         \n\t"
+ 505:video.c       **** 		HWS_ANDI
+ 506:video.c       **** 		HWS_BST
+ 507:video.c       **** 		HWS_BLD
+ 508:video.c       **** 		"    out  %[port], r16           \n"
+ 509:video.c       **** 		:: [port] "i" (_SFR_IO_ADDR(VID_PORT)), "x" (frame),
+ 510:video.c       **** 		"y" (renderLine), [hres] "d" (WIDTH) : "r16"
+ 511:video.c       **** 	);
+ 512:video.c       **** 
+ 513:video.c       **** 	#elif RMETHOD == 5
+ 514:video.c       **** 
+ 515:video.c       **** 	__asm__ __volatile__
+ 516:video.c       **** 	(
+ 517:video.c       **** 		"ADD  r26, r28                 \n\t"
+ 518:video.c       **** 		"ADC  r27, r29                 \n\t"
+ 519:video.c       **** 		"in   r16, %[port]             \n\t"
+ 520:video.c       **** 		HWS_ANDI
+ 521:video.c       **** 		"rjmp enter5                     \n"
+ 522:video.c       **** 		"loop5:                        \n\t"
+ 523:video.c       **** 		"    bst  __tmp_reg__, 0       \n\t"
+ 524:video.c       **** 		HWS_BLD
+ 525:video.c       **** 		"    out  %[port], r16           \n"
+ 526:video.c       **** 		"enter5:                       \n\t"
+ 527:video.c       **** 		"    LD   __tmp_reg__, X+      \n\t"
+ 528:video.c       **** 		"    bst  __tmp_reg__, 7       \n\t"
+ 529:video.c       **** 		HWS_BLD
+ 530:video.c       **** 		"    out  %[port], r16           \n"
+ 531:video.c       **** 		"    nop                       \n\t"
+ 532:video.c       **** 		"    nop                       \n\t"
+ 533:video.c       **** 		"    bst  __tmp_reg__, 6       \n\t"
+ 534:video.c       **** 		HWS_BLD
+ 535:video.c       **** 		"    out  %[port], r16           \n"
+ 536:video.c       **** 		"    nop                       \n\t"
+ 537:video.c       **** 		"    nop                       \n\t"
+ 538:video.c       **** 		"    bst  __tmp_reg__, 5       \n\t"
+ 539:video.c       **** 		HWS_BLD
+ 540:video.c       **** 		"    out  %[port], r16           \n"
+ 541:video.c       **** 		"    nop                       \n\t"
+ 542:video.c       **** 		"    nop                       \n\t"
+ 543:video.c       **** 		"    bst  __tmp_reg__, 4       \n\t"
+ 544:video.c       **** 		HWS_BLD
+ 545:video.c       **** 		"    out  %[port], r16           \n"
+ 546:video.c       **** 		"    nop                       \n\t"
+ 547:video.c       **** 		"    nop                       \n\t"
+ 548:video.c       **** 		"    bst  __tmp_reg__, 3       \n\t"
+ 549:video.c       **** 		HWS_BLD
+ 550:video.c       **** 		"    out  %[port], r16           \n"
+ 551:video.c       **** 		"    nop                       \n\t"
+ 552:video.c       **** 		"    nop                       \n\t"
+ 553:video.c       **** 		"    bst  __tmp_reg__, 2       \n\t"
+ 554:video.c       **** 		HWS_BLD
+ 555:video.c       **** 		"    out  %[port], r16           \n"
+ 556:video.c       **** 		"    nop                       \n\t"
+ 557:video.c       **** 		"    dec  %[hres]              \n\t"
+ 558:video.c       **** 		"    bst  __tmp_reg__, 1       \n\t"
+ 559:video.c       **** 		HWS_BLD
+ 560:video.c       **** 		"    out  %[port], r16           \n"
+ 561:video.c       **** 		"    brne loop5                \n\t"
+ 562:video.c       **** 		"    nop                       \n\t"
+ 563:video.c       **** 		"    bst  __tmp_reg__, 0       \n\t"
+ 564:video.c       **** 		HWS_BLD
+ 565:video.c       **** 		"    out  %[port], r16           \n"
+ 566:video.c       **** 		"    in   r16, %[port]         \n\t"
+ 567:video.c       **** 		HWS_ANDI
+ 568:video.c       **** 		HWS_BST
+ 569:video.c       **** 		HWS_BLD
+ 570:video.c       **** 		"    out   %[port], r16          \n"
+ 571:video.c       **** 		:: [port] "i" (_SFR_IO_ADDR(VID_PORT)), "x" (frame),
+ 572:video.c       **** 		"y" (renderLine), [hres] "d" (WIDTH) : "r16"
+ 573:video.c       **** 	);
+ 574:video.c       **** 
+ 575:video.c       **** 	#elif RMETHOD == 4
+ 576:video.c       **** 
+ 577:video.c       **** 	__asm__ __volatile__
+ 182               		.loc 1 577 2 is_stmt 1 view .LVU39
+ 183               	/* #NOAPP */
+ 184 00ea C091 0000 		lds r28,renderLine
+ 185 00ee D091 0000 		lds r29,renderLine+1
+ 186 00f2 A0E0      		ldi r26,lo8(frame)
+ 187 00f4 B0E0      		ldi r27,hi8(frame)
+ 188 00f6 84E1      		ldi r24,lo8(20)
+ 189 00f8 90E0      		ldi r25,0
+ 190               	/* #APP */
+ 191               	 ;  577 "video.c" 1
+ 192 00fa AC0F      		ADD  r26, r28                 
+ 193 00fc BD1F      		ADC  r27, r29                 
+ 194 00fe 00C0      		rjmp enter4                     
+ 195               	loop4:                        
+ 196 0100 000C      		    lsl  __tmp_reg__          
+ 197 0102 0BB8      		    out  11, __tmp_reg__ 
+ 198               		enter4:                       
+ 199 0104 0D90      		    LD   __tmp_reg__, X+      
+ 200 0106 0000      		    nop                       
+ 201 0108 0BB8      		    out  11, __tmp_reg__ 
+ 202 010a 0000      		    nop                       
+ 203 010c 0000      		    nop                       
+ 204 010e 000C      		    lsl  __tmp_reg__          
+ 205 0110 0BB8      		    out  11, __tmp_reg__ 
+ 206 0112 0000      		    nop                       
+ 207 0114 0000      		    nop                       
+ 208 0116 000C      		    lsl  __tmp_reg__          
+ 209 0118 0BB8      		    out  11, __tmp_reg__ 
+ 210 011a 0000      		    nop                       
+ 211 011c 0000      		    nop                       
+ 212 011e 000C      		    lsl  __tmp_reg__          
+ 213 0120 0BB8      		    out  11, __tmp_reg__ 
+ 214 0122 0000      		    nop                       
+ 215 0124 0000      		    nop                       
+ 216 0126 000C      		    lsl  __tmp_reg__          
+ 217 0128 0BB8      		    out  11, __tmp_reg__ 
+ 218 012a 0000      		    nop                       
+ 219 012c 0000      		    nop                       
+ 220 012e 000C      		    lsl  __tmp_reg__          
+ 221 0130 0BB8      		    out  11, __tmp_reg__ 
+ 222 0132 0000      		    nop                       
+ 223 0134 000C      		    lsl  __tmp_reg__          
+ 224 0136 8A95      		    dec  r24              
+ 225 0138 0BB8      		    out  11, __tmp_reg__ 
+ 226 013a 01F4      		    brne loop4                
+ 227 013c 0000      		    nop                       
+ 228 013e 000C      		    lsl  __tmp_reg__          
+ 229 0140 0BB8      		    out  11, __tmp_reg__ 
+ 230 0142 0000      		    nop                       
+ 231 0144 0000      		    nop                       
+ 232 0146 0000      		    nop                       
+ 233 0148 5F98      		    cbi  11, 7           
+ 234               		
+ 235               	 ;  0 "" 2
+ 578:video.c       **** 	(
+ 579:video.c       **** 		"ADD  r26, r28                 \n\t"
+ 580:video.c       **** 		"ADC  r27, r29                 \n\t"
+ 581:video.c       **** 		"rjmp enter4                     \n"
+ 582:video.c       **** 		"loop4:                        \n\t"
+ 583:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 584:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 585:video.c       **** 		"enter4:                       \n\t"
+ 586:video.c       **** 		"    LD   __tmp_reg__, X+      \n\t"
+ 587:video.c       **** 		"    nop                       \n\t"
+ 588:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 589:video.c       **** 		"    nop                       \n\t"
+ 590:video.c       **** 		"    nop                       \n\t"
+ 591:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 592:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 593:video.c       **** 		"    nop                       \n\t"
+ 594:video.c       **** 		"    nop                       \n\t"
+ 595:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 596:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 597:video.c       **** 		"    nop                       \n\t"
+ 598:video.c       **** 		"    nop                       \n\t"
+ 599:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 600:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 601:video.c       **** 		"    nop                       \n\t"
+ 602:video.c       **** 		"    nop                       \n\t"
+ 603:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 604:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 605:video.c       **** 		"    nop                       \n\t"
+ 606:video.c       **** 		"    nop                       \n\t"
+ 607:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 608:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 609:video.c       **** 		"    nop                       \n\t"
+ 610:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 611:video.c       **** 		"    dec  %[hres]              \n\t"
+ 612:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 613:video.c       **** 		"    brne loop4                \n\t"
+ 614:video.c       **** 		"    nop                       \n\t"
+ 615:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 616:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 617:video.c       **** 		"    nop                       \n\t"
+ 618:video.c       **** 		"    nop                       \n\t"
+ 619:video.c       **** 		"    nop                       \n\t"
+ 620:video.c       **** 		"    cbi  %[port], 7           \n\t"
+ 621:video.c       **** 		:: [port] "i" (_SFR_IO_ADDR(VID_PORT)), "x" (frame),
+ 622:video.c       **** 		"y" (renderLine), [hres] "d" (WIDTH) : "r16"
+ 623:video.c       **** 	);
+ 624:video.c       **** 
+ 625:video.c       **** 	#elif RMETHOD <= 3
+ 626:video.c       **** 
+ 627:video.c       **** 
+ 628:video.c       **** 	__asm__ __volatile__
+ 629:video.c       **** 	(
+ 630:video.c       **** 		".macro byteshift              \n\t"
+ 631:video.c       **** 		"    LD   __tmp_reg__, X+      \n\t"
+ 632:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 633:video.c       **** 		"    nop                       \n\t"
+ 634:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 635:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 636:video.c       **** 		"    nop                       \n\t"
+ 637:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 638:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 639:video.c       **** 		"    nop                       \n\t"
+ 640:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 641:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 642:video.c       **** 		"    nop                       \n\t"
+ 643:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 644:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 645:video.c       **** 		"    nop                       \n\t"
+ 646:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 647:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 648:video.c       **** 		"    nop                       \n\t"
+ 649:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 650:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 651:video.c       **** 		"    nop                       \n\t"
+ 652:video.c       **** 		"    lsl  __tmp_reg__          \n\t"
+ 653:video.c       **** 		"    out  %[port], __tmp_reg__ \n\t"
+ 654:video.c       **** 		".endm                         \n\t"
+ 655:video.c       **** 		"ADD  r26, r28                 \n\t"
+ 656:video.c       **** 		"ADC  r27, r29                 \n\t"
+ 657:video.c       **** 		"cpi  %[hres], 30              \n\t"
+ 658:video.c       **** 		"breq skip0                    \n\t"
+ 659:video.c       **** 		"cpi  %[hres], 29              \n\t"
+ 660:video.c       **** 		"breq jumpto1                  \n\t"
+ 661:video.c       **** 		"cpi  %[hres], 28              \n\t"
+ 662:video.c       **** 		"breq jumpto2                  \n\t"
+ 663:video.c       **** 		"cpi  %[hres], 27              \n\t"
+ 664:video.c       **** 		"breq jumpto3                  \n\t"
+ 665:video.c       **** 		"cpi  %[hres], 26              \n\t"
+ 666:video.c       **** 		"breq jumpto4                  \n\t"
+ 667:video.c       **** 		"cpi  %[hres], 25              \n\t"
+ 668:video.c       **** 		"breq jumpto5                  \n\t"
+ 669:video.c       **** 		"cpi  %[hres], 24              \n\t"
+ 670:video.c       **** 		"breq jumpto6                  \n\t"
+ 671:video.c       **** 		"jumpto1:                      \n\t"
+ 672:video.c       **** 		"    rjmp skip1                \n\t"
+ 673:video.c       **** 		"jumpto2:                      \n\t"
+ 674:video.c       **** 		"    rjmp skip2                \n\t"
+ 675:video.c       **** 		"jumpto3:                      \n\t"
+ 676:video.c       **** 		"    rjmp skip3                \n\t"
+ 677:video.c       **** 		"jumpto4:                      \n\t"
+ 678:video.c       **** 		"    rjmp skip4                \n\t"
+ 679:video.c       **** 		"jumpto5:                      \n\t"
+ 680:video.c       **** 		"    rjmp skip5                \n\t"
+ 681:video.c       **** 		"jumpto6:                      \n\t"
+ 682:video.c       **** 		"    rjmp skip6                \n\t"
+ 683:video.c       **** 		"skip0:                        \n\t"
+ 684:video.c       **** 		"    byteshift                 \n\t"
+ 685:video.c       **** 		"skip1:                        \n\t"
+ 686:video.c       **** 		"    byteshift                 \n\t"
+ 687:video.c       **** 		"skip2:                        \n\t"
+ 688:video.c       **** 		"    byteshift                 \n\t"
+ 689:video.c       **** 		"skip3:                        \n\t"
+ 690:video.c       **** 		"    byteshift                 \n\t"
+ 691:video.c       **** 		"skip4:                        \n\t"
+ 692:video.c       **** 		"    byteshift                 \n\t"
+ 693:video.c       **** 		"skip5:                        \n\t"
+ 694:video.c       **** 		"    byteshift                 \n\t"
+ 695:video.c       **** 		"skip6:                        \n\t"
+ 696:video.c       **** 		"    byteshift                 \n\t"
+ 697:video.c       **** 		"    byteshift                 \n\t"
+ 698:video.c       **** 		"    byteshift                 \n\t"
+ 699:video.c       **** 		"    byteshift                 \n\t"
+ 700:video.c       **** 		"    byteshift                 \n\t"
+ 701:video.c       **** 		"    byteshift                 \n\t"
+ 702:video.c       **** 		"    byteshift                 \n\t"
+ 703:video.c       **** 		"    byteshift                 \n\t"
+ 704:video.c       **** 		"    byteshift                 \n\t"
+ 705:video.c       **** 		"    byteshift                 \n\t"
+ 706:video.c       **** 		"    byteshift                 \n\t"
+ 707:video.c       **** 		"    byteshift                 \n\t"
+ 708:video.c       **** 		"    byteshift                 \n\t"
+ 709:video.c       **** 		"    byteshift                 \n\t"
+ 710:video.c       **** 		"    byteshift                 \n\t"
+ 711:video.c       **** 		"    byteshift                 \n\t"
+ 712:video.c       **** 		"    byteshift                 \n\t"
+ 713:video.c       **** 		"    byteshift                 \n\t"
+ 714:video.c       **** 		"    byteshift                 \n\t"
+ 715:video.c       **** 		"    byteshift                 \n\t"
+ 716:video.c       **** 		"    byteshift                 \n\t"
+ 717:video.c       **** 		"    byteshift                 \n\t"
+ 718:video.c       **** 		"    byteshift                 \n\t"
+ 719:video.c       **** 		"    byteshift                 \n\t"
+ 720:video.c       **** 		"    nop                       \n\t"
+ 721:video.c       **** 		"    nop                       \n\t"
+ 722:video.c       **** 		"    cbi %[port], 7            \n\t"
+ 723:video.c       **** 		:: [port] "i" (_SFR_IO_ADDR(VID_PORT)), "x" (frame),
+ 724:video.c       **** 		"y" (renderLine), [hres] "d" (WIDTH) : "r16"
+ 725:video.c       **** 	);
+ 726:video.c       **** 
+ 727:video.c       **** 	#endif
+ 728:video.c       **** 
+ 729:video.c       **** 	if(!vscale)
+ 236               		.loc 1 729 2 view .LVU40
+ 237               		.loc 1 729 5 is_stmt 0 view .LVU41
+ 238               	/* #NOAPP */
+ 239 014a 9091 0000 		lds r25,vscale
+ 240 014e 8091 0000 		lds r24,vscale_const
+ 241               		.loc 1 729 4 view .LVU42
+ 242 0152 9111      		cpse r25,__zero_reg__
+ 243 0154 00C0      		rjmp .L9
+ 730:video.c       **** 	{
+ 731:video.c       **** 		vscale = vscale_const;
+ 244               		.loc 1 731 3 is_stmt 1 view .LVU43
+ 245               		.loc 1 731 10 is_stmt 0 view .LVU44
+ 246 0156 8093 0000 		sts vscale,r24
+ 732:video.c       **** 		renderLine += WIDTH;
+ 247               		.loc 1 732 3 is_stmt 1 view .LVU45
+ 248               		.loc 1 732 14 is_stmt 0 view .LVU46
+ 249 015a 6496      		adiw r28,20
+ 250 015c D093 0000 		sts renderLine+1,r29
+ 251 0160 C093 0000 		sts renderLine,r28
+ 252               	.L10:
+ 733:video.c       **** 	}
+ 734:video.c       **** 	else
+ 735:video.c       **** 	{
+ 736:video.c       **** 		--vscale;
+ 737:video.c       **** 	}
+ 738:video.c       **** 
+ 739:video.c       **** 	if(scanLine++ == (int)(start_render + HEIGHT * (vscale_const + 1)))
+ 253               		.loc 1 739 2 is_stmt 1 view .LVU47
+ 254               		.loc 1 739 13 is_stmt 0 view .LVU48
+ 255 0164 2091 0000 		lds r18,scanLine
+ 256 0168 3091 0000 		lds r19,scanLine+1
+ 257 016c A901      		movw r20,r18
+ 258 016e 4F5F      		subi r20,-1
+ 259 0170 5F4F      		sbci r21,-1
+ 260 0172 5093 0000 		sts scanLine+1,r21
+ 261 0176 4093 0000 		sts scanLine,r20
+ 262               		.loc 1 739 63 view .LVU49
+ 263 017a 90E0      		ldi r25,0
+ 264 017c 0196      		adiw r24,1
+ 265               		.loc 1 739 47 view .LVU50
+ 266 017e 60E6      		ldi r22,lo8(96)
+ 267 0180 689F      		mul r22,r24
+ 268 0182 A001      		movw r20,r0
+ 269 0184 699F      		mul r22,r25
+ 270 0186 500D      		add r21,r0
+ 271 0188 1124      		clr __zero_reg__
+ 272               		.loc 1 739 19 view .LVU51
+ 273 018a 8091 0000 		lds r24,start_render
+ 274 018e 840F      		add r24,r20
+ 275 0190 952F      		mov r25,r21
+ 276 0192 911D      		adc r25,__zero_reg__
+ 277               		.loc 1 739 4 view .LVU52
+ 278 0194 2817      		cp r18,r24
+ 279 0196 3907      		cpc r19,r25
+ 280 0198 01F4      		brne .L8
+ 740:video.c       **** 	{
+ 741:video.c       **** 		line_handler = &blank_line;
+ 281               		.loc 1 741 3 is_stmt 1 view .LVU53
+ 282               		.loc 1 741 16 is_stmt 0 view .LVU54
+ 283 019a 80E0      		ldi r24,lo8(gs(blank_line))
+ 284 019c 90E0      		ldi r25,hi8(gs(blank_line))
+ 285 019e 9093 0000 		sts line_handler+1,r25
+ 286 01a2 8093 0000 		sts line_handler,r24
+ 287               	.L8:
+ 288               	/* epilogue start */
+ 742:video.c       **** 	}
+ 743:video.c       **** }
+ 289               		.loc 1 743 1 view .LVU55
+ 290 01a6 DF91      		pop r29
+ 291 01a8 CF91      		pop r28
+ 292 01aa 0F91      		pop r16
+ 293 01ac 0895      		ret
+ 294               	.L9:
+ 736:video.c       **** 	}
+ 295               		.loc 1 736 3 is_stmt 1 view .LVU56
+ 296 01ae 9150      		subi r25,lo8(-(-1))
+ 297 01b0 9093 0000 		sts vscale,r25
+ 298 01b4 00C0      		rjmp .L10
+ 299               		.cfi_endproc
+ 300               	.LFE19:
+ 302               	.global	abs
+ 304               	abs:
+ 305               	.LVL0:
+ 306               	.LFB1:
+  17:video.c       **** 	return (v < 0) ? (v * -1) : v;
+ 307               		.loc 1 17 1 view -0
+ 308               		.cfi_startproc
+ 309               	/* prologue: function */
+ 310               	/* frame size = 0 */
+ 311               	/* stack size = 0 */
+ 312               	.L__stack_usage = 0
+  18:video.c       **** }
+ 313               		.loc 1 18 2 view .LVU58
+  18:video.c       **** }
+ 314               		.loc 1 18 28 is_stmt 0 view .LVU59
+ 315 01b6 97FF      		sbrs r25,7
+ 316 01b8 00C0      		rjmp .L13
+ 317 01ba 9195      		neg r25
+ 318 01bc 8195      		neg r24
+ 319 01be 9109      		sbc r25,__zero_reg__
+ 320               	.LVL1:
+ 321               	.L13:
+ 322               	/* epilogue start */
+  19:video.c       **** 
+ 323               		.loc 1 19 1 view .LVU60
+ 324 01c0 0895      		ret
+ 325               		.cfi_endproc
+ 326               	.LFE1:
+ 328               	.global	video_begin
+ 330               	video_begin:
+ 331               	.LVL2:
+ 332               	.LFB2:
+  22:video.c       **** 	VID_DDR |= (1 << VID_PIN);
+ 333               		.loc 1 22 1 is_stmt 1 view -0
+ 334               		.cfi_startproc
+ 335               	/* prologue: function */
+ 336               	/* frame size = 0 */
+ 337               	/* stack size = 0 */
+ 338               	.L__stack_usage = 0
+  23:video.c       **** 	VID_PORT &= ~(1 << VID_PIN);
+ 339               		.loc 1 23 2 view .LVU62
+  23:video.c       **** 	VID_PORT &= ~(1 << VID_PIN);
+ 340               		.loc 1 23 10 is_stmt 0 view .LVU63
+ 341 01c2 579A      		sbi 0xa,7
+  24:video.c       **** 	SYNC_DDR |= (1 << SYNC_PIN);
+ 342               		.loc 1 24 2 is_stmt 1 view .LVU64
+  24:video.c       **** 	SYNC_DDR |= (1 << SYNC_PIN);
+ 343               		.loc 1 24 11 is_stmt 0 view .LVU65
+ 344 01c4 5F98      		cbi 0xb,7
+  25:video.c       **** 	SYNC_PORT |= (1 << SYNC_PIN);
+ 345               		.loc 1 25 2 is_stmt 1 view .LVU66
+  25:video.c       **** 	SYNC_PORT |= (1 << SYNC_PIN);
+ 346               		.loc 1 25 11 is_stmt 0 view .LVU67
+ 347 01c6 219A      		sbi 0x4,1
+  26:video.c       **** 
+ 348               		.loc 1 26 2 is_stmt 1 view .LVU68
+  26:video.c       **** 
+ 349               		.loc 1 26 12 is_stmt 0 view .LVU69
+ 350 01c8 299A      		sbi 0x5,1
+  28:video.c       **** 	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS10);
+ 351               		.loc 1 28 2 is_stmt 1 view .LVU70
+  28:video.c       **** 	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS10);
+ 352               		.loc 1 28 9 is_stmt 0 view .LVU71
+ 353 01ca 92EC      		ldi r25,lo8(-62)
+ 354 01cc 9093 8000 		sts 128,r25
+  29:video.c       **** 
+ 355               		.loc 1 29 2 is_stmt 1 view .LVU72
+  29:video.c       **** 
+ 356               		.loc 1 29 9 is_stmt 0 view .LVU73
+ 357 01d0 99E1      		ldi r25,lo8(25)
+ 358 01d2 9093 8100 		sts 129,r25
+  31:video.c       **** 	{
+ 359               		.loc 1 31 2 is_stmt 1 view .LVU74
+  31:video.c       **** 	{
+ 360               		.loc 1 31 4 is_stmt 0 view .LVU75
+ 361 01d6 8823      		tst r24
+ 362 01d8 01F0      		breq .L15
+  33:video.c       **** 		start_render = START_RENDER_PAL;
+ 363               		.loc 1 33 3 is_stmt 1 view .LVU76
+  33:video.c       **** 		start_render = START_RENDER_PAL;
+ 364               		.loc 1 33 16 is_stmt 0 view .LVU77
+ 365 01da 81E0      		ldi r24,lo8(1)
+ 366               	.LVL3:
+  33:video.c       **** 		start_render = START_RENDER_PAL;
+ 367               		.loc 1 33 16 view .LVU78
+ 368 01dc 8093 0000 		sts vscale_const,r24
+  34:video.c       **** 		output_delay = PAL_CYCLES_OUTPUT_START;
+ 369               		.loc 1 34 3 is_stmt 1 view .LVU79
+  34:video.c       **** 		output_delay = PAL_CYCLES_OUTPUT_START;
+ 370               		.loc 1 34 16 is_stmt 0 view .LVU80
+ 371 01e0 8CE3      		ldi r24,lo8(60)
+ 372 01e2 8093 0000 		sts start_render,r24
+  35:video.c       **** 		vsync_end = PAL_LINE_STOP_VSYNC;
+ 373               		.loc 1 35 3 is_stmt 1 view .LVU81
+  35:video.c       **** 		vsync_end = PAL_LINE_STOP_VSYNC;
+ 374               		.loc 1 35 16 is_stmt 0 view .LVU82
+ 375 01e6 87EC      		ldi r24,lo8(-57)
+ 376 01e8 8093 0000 		sts output_delay,r24
+  36:video.c       **** 		lines_frame = PAL_LINE_FRAME;
+ 377               		.loc 1 36 3 is_stmt 1 view .LVU83
+  36:video.c       **** 		lines_frame = PAL_LINE_FRAME;
+ 378               		.loc 1 36 13 is_stmt 0 view .LVU84
+ 379 01ec 87E0      		ldi r24,lo8(7)
+ 380 01ee 8093 0000 		sts vsync_end,r24
+  37:video.c       **** 		ICR1 = PAL_CYCLES_SCANLINE;
+ 381               		.loc 1 37 3 is_stmt 1 view .LVU85
+  37:video.c       **** 		ICR1 = PAL_CYCLES_SCANLINE;
+ 382               		.loc 1 37 15 is_stmt 0 view .LVU86
+ 383 01f2 88E3      		ldi r24,lo8(56)
+ 384 01f4 91E0      		ldi r25,lo8(1)
+ 385 01f6 9093 0000 		sts lines_frame+1,r25
+ 386 01fa 8093 0000 		sts lines_frame,r24
+  38:video.c       **** 	}
+ 387               		.loc 1 38 3 is_stmt 1 view .LVU87
+  38:video.c       **** 	}
+ 388               		.loc 1 38 8 is_stmt 0 view .LVU88
+ 389 01fe 8FEF      		ldi r24,lo8(-1)
+ 390 0200 93E0      		ldi r25,lo8(3)
+ 391               	.L17:
+  47:video.c       **** 	}
+ 392               		.loc 1 47 8 view .LVU89
+ 393 0202 9093 8700 		sts 134+1,r25
+ 394 0206 8093 8600 		sts 134,r24
+  50:video.c       **** 	OCR1A = CYCLES_HORZ_SYNC;
+ 395               		.loc 1 50 2 is_stmt 1 view .LVU90
+  50:video.c       **** 	OCR1A = CYCLES_HORZ_SYNC;
+ 396               		.loc 1 50 9 is_stmt 0 view .LVU91
+ 397 020a 21E0      		ldi r18,lo8(1)
+ 398 020c 2093 0000 		sts vscale,r18
+  51:video.c       **** 	scanLine = lines_frame + 1;
+ 399               		.loc 1 51 2 is_stmt 1 view .LVU92
+  51:video.c       **** 	scanLine = lines_frame + 1;
+ 400               		.loc 1 51 8 is_stmt 0 view .LVU93
+ 401 0210 8AE4      		ldi r24,lo8(74)
+ 402 0212 90E0      		ldi r25,0
+ 403 0214 9093 8900 		sts 136+1,r25
+ 404 0218 8093 8800 		sts 136,r24
+  52:video.c       **** 	line_handler = &vsync_line;
+ 405               		.loc 1 52 2 is_stmt 1 view .LVU94
+  52:video.c       **** 	line_handler = &vsync_line;
+ 406               		.loc 1 52 25 is_stmt 0 view .LVU95
+ 407 021c 8091 0000 		lds r24,lines_frame
+ 408 0220 9091 0000 		lds r25,lines_frame+1
+ 409 0224 0196      		adiw r24,1
+  52:video.c       **** 	line_handler = &vsync_line;
+ 410               		.loc 1 52 11 view .LVU96
+ 411 0226 9093 0000 		sts scanLine+1,r25
+ 412 022a 8093 0000 		sts scanLine,r24
+  53:video.c       **** 	TIMSK1 = (1 << TOIE1);
+ 413               		.loc 1 53 2 is_stmt 1 view .LVU97
+  53:video.c       **** 	TIMSK1 = (1 << TOIE1);
+ 414               		.loc 1 53 15 is_stmt 0 view .LVU98
+ 415 022e 80E0      		ldi r24,lo8(gs(vsync_line))
+ 416 0230 90E0      		ldi r25,hi8(gs(vsync_line))
+ 417 0232 9093 0000 		sts line_handler+1,r25
+ 418 0236 8093 0000 		sts line_handler,r24
+  54:video.c       **** 	sei();
+ 419               		.loc 1 54 2 is_stmt 1 view .LVU99
+  54:video.c       **** 	sei();
+ 420               		.loc 1 54 9 is_stmt 0 view .LVU100
+ 421 023a 2093 6F00 		sts 111,r18
+  55:video.c       **** }
+ 422               		.loc 1 55 2 is_stmt 1 view .LVU101
+ 423               	/* #APP */
+ 424               	 ;  55 "video.c" 1
+ 425 023e 7894      		sei
+ 426               	 ;  0 "" 2
+ 427               	/* #NOAPP */
+ 428               	/* epilogue start */
+  56:video.c       **** 
+ 429               		.loc 1 56 1 is_stmt 0 view .LVU102
+ 430 0240 0895      		ret
+ 431               	.LVL4:
+ 432               	.L15:
+  42:video.c       **** 		start_render = START_RENDER_NTSC;
+ 433               		.loc 1 42 3 is_stmt 1 view .LVU103
+  42:video.c       **** 		start_render = START_RENDER_NTSC;
+ 434               		.loc 1 42 16 is_stmt 0 view .LVU104
+ 435 0242 81E0      		ldi r24,lo8(1)
+ 436               	.LVL5:
+  42:video.c       **** 		start_render = START_RENDER_NTSC;
+ 437               		.loc 1 42 16 view .LVU105
+ 438 0244 8093 0000 		sts vscale_const,r24
+  43:video.c       **** 		output_delay = NTSC_CYCLES_OUTPUT_START;
+ 439               		.loc 1 43 3 is_stmt 1 view .LVU106
+  43:video.c       **** 		output_delay = NTSC_CYCLES_OUTPUT_START;
+ 440               		.loc 1 43 16 is_stmt 0 view .LVU107
+ 441 0248 8BE2      		ldi r24,lo8(43)
+ 442 024a 8093 0000 		sts start_render,r24
+  44:video.c       **** 		vsync_end = NTSC_LINE_STOP_VSYNC;
+ 443               		.loc 1 44 3 is_stmt 1 view .LVU108
+  44:video.c       **** 		vsync_end = NTSC_LINE_STOP_VSYNC;
+ 444               		.loc 1 44 16 is_stmt 0 view .LVU109
+ 445 024e 8FEB      		ldi r24,lo8(-65)
+ 446 0250 8093 0000 		sts output_delay,r24
+  45:video.c       **** 		lines_frame = NTSC_LINE_FRAME;
+ 447               		.loc 1 45 3 is_stmt 1 view .LVU110
+  45:video.c       **** 		lines_frame = NTSC_LINE_FRAME;
+ 448               		.loc 1 45 13 is_stmt 0 view .LVU111
+ 449 0254 83E0      		ldi r24,lo8(3)
+ 450 0256 8093 0000 		sts vsync_end,r24
+  46:video.c       **** 		ICR1 = NTSC_CYCLES_SCANLINE;
+ 451               		.loc 1 46 3 is_stmt 1 view .LVU112
+  46:video.c       **** 		ICR1 = NTSC_CYCLES_SCANLINE;
+ 452               		.loc 1 46 15 is_stmt 0 view .LVU113
+ 453 025a 86E0      		ldi r24,lo8(6)
+ 454 025c 91E0      		ldi r25,lo8(1)
+ 455 025e 9093 0000 		sts lines_frame+1,r25
+ 456 0262 8093 0000 		sts lines_frame,r24
+  47:video.c       **** 	}
+ 457               		.loc 1 47 3 is_stmt 1 view .LVU114
+  47:video.c       **** 	}
+ 458               		.loc 1 47 8 is_stmt 0 view .LVU115
+ 459 0266 87EF      		ldi r24,lo8(-9)
+ 460 0268 93E0      		ldi r25,lo8(3)
+ 461 026a 00C0      		rjmp .L17
+ 462               		.cfi_endproc
+ 463               	.LFE2:
+ 465               	.global	video_sp
+ 467               	video_sp:
+ 468               	.LVL6:
+ 469               	.LFB3:
+  59:video.c       **** 	switch(video_color)
+ 470               		.loc 1 59 1 is_stmt 1 view -0
+ 471               		.cfi_startproc
+ 472               	/* prologue: function */
+ 473               	/* frame size = 0 */
+ 474               	/* stack size = 0 */
+ 475               	.L__stack_usage = 0
+  60:video.c       **** 	{
+ 476               		.loc 1 60 2 view .LVU117
+ 477 026c 9091 0000 		lds r25,video_color
+ 478 0270 9130      		cpi r25,lo8(1)
+ 479 0272 01F0      		breq .L19
+ 480 0274 9230      		cpi r25,lo8(2)
+ 481 0276 01F0      		breq .L20
+ 482 0278 9111      		cpse r25,__zero_reg__
+ 483 027a 00C0      		rjmp .L18
+ 484               	.LVL7:
+ 485               	.LBB4:
+ 486               	.LBI4:
+  58:video.c       **** {
+ 487               		.loc 1 58 6 view .LVU118
+ 488               	.LBB5:
+  64:video.c       **** 			break;
+ 489               		.loc 1 64 4 view .LVU119
+  64:video.c       **** 			break;
+ 490               		.loc 1 64 34 is_stmt 0 view .LVU120
+ 491 027c E82F      		mov r30,r24
+ 492 027e E695      		lsr r30
+ 493 0280 E695      		lsr r30
+ 494 0282 E695      		lsr r30
+ 495 0284 94E1      		ldi r25,lo8(20)
+ 496 0286 699F      		mul r22,r25
+ 497 0288 B001      		movw r22,r0
+ 498 028a 1124      		clr __zero_reg__
+ 499               	.LVL8:
+  64:video.c       **** 			break;
+ 500               		.loc 1 64 34 view .LVU121
+ 501 028c E60F      		add r30,r22
+ 502 028e F72F      		mov r31,r23
+ 503 0290 F11D      		adc r31,__zero_reg__
+ 504 0292 E050      		subi r30,lo8(-(frame))
+ 505 0294 F040      		sbci r31,hi8(-(frame))
+  64:video.c       **** 			break;
+ 506               		.loc 1 64 50 view .LVU122
+ 507 0296 8770      		andi r24,lo8(7)
+ 508               	.LVL9:
+  64:video.c       **** 			break;
+ 509               		.loc 1 64 44 view .LVU123
+ 510 0298 2FE7      		ldi r18,lo8(127)
+ 511 029a 3FEF      		ldi r19,lo8(-1)
+ 512 029c 00C0      		rjmp 2f
+ 513               		1:
+ 514 029e 3595      		asr r19
+ 515 02a0 2795      		ror r18
+ 516               		2:
+ 517 02a2 8A95      		dec r24
+ 518 02a4 02F4      		brpl 1b
+  64:video.c       **** 			break;
+ 519               		.loc 1 64 34 view .LVU124
+ 520 02a6 8081      		ld r24,Z
+ 521 02a8 8223      		and r24,r18
+ 522               	.LVL10:
+ 523               	.L22:
+  64:video.c       **** 			break;
+ 524               		.loc 1 64 34 view .LVU125
+ 525               	.LBE5:
+ 526               	.LBE4:
+  76:video.c       **** 			break;
+ 527               		.loc 1 76 34 view .LVU126
+ 528 02aa 8083      		st Z,r24
+  77:video.c       **** 		}
+ 529               		.loc 1 77 4 is_stmt 1 view .LVU127
+ 530               	.L18:
+ 531               	/* epilogue start */
+  80:video.c       **** 
+ 532               		.loc 1 80 1 is_stmt 0 view .LVU128
+ 533 02ac 0895      		ret
+ 534               	.LVL11:
+ 535               	.L19:
+  70:video.c       **** 			break;
+ 536               		.loc 1 70 4 is_stmt 1 view .LVU129
+  70:video.c       **** 			break;
+ 537               		.loc 1 70 34 is_stmt 0 view .LVU130
+ 538 02ae E82F      		mov r30,r24
+ 539 02b0 E695      		lsr r30
+ 540 02b2 E695      		lsr r30
+ 541 02b4 E695      		lsr r30
+ 542 02b6 94E1      		ldi r25,lo8(20)
+ 543 02b8 699F      		mul r22,r25
+ 544 02ba B001      		movw r22,r0
+ 545 02bc 1124      		clr __zero_reg__
+ 546               	.LVL12:
+  70:video.c       **** 			break;
+ 547               		.loc 1 70 34 view .LVU131
+ 548 02be E60F      		add r30,r22
+ 549 02c0 F72F      		mov r31,r23
+ 550 02c2 F11D      		adc r31,__zero_reg__
+ 551 02c4 E050      		subi r30,lo8(-(frame))
+ 552 02c6 F040      		sbci r31,hi8(-(frame))
+  70:video.c       **** 			break;
+ 553               		.loc 1 70 49 view .LVU132
+ 554 02c8 8770      		andi r24,lo8(7)
+ 555               	.LVL13:
+  70:video.c       **** 			break;
+ 556               		.loc 1 70 43 view .LVU133
+ 557 02ca 20E8      		ldi r18,lo8(-128)
+ 558 02cc 30E0      		ldi r19,0
+ 559 02ce 00C0      		rjmp 2f
+ 560               		1:
+ 561 02d0 3595      		asr r19
+ 562 02d2 2795      		ror r18
+ 563               		2:
+ 564 02d4 8A95      		dec r24
+ 565 02d6 02F4      		brpl 1b
+  70:video.c       **** 			break;
+ 566               		.loc 1 70 34 view .LVU134
+ 567 02d8 8081      		ld r24,Z
+ 568 02da 822B      		or r24,r18
+ 569 02dc 00C0      		rjmp .L22
+ 570               	.LVL14:
+ 571               	.L20:
+  76:video.c       **** 			break;
+ 572               		.loc 1 76 4 is_stmt 1 view .LVU135
+  76:video.c       **** 			break;
+ 573               		.loc 1 76 34 is_stmt 0 view .LVU136
+ 574 02de E82F      		mov r30,r24
+ 575 02e0 E695      		lsr r30
+ 576 02e2 E695      		lsr r30
+ 577 02e4 E695      		lsr r30
+ 578 02e6 94E1      		ldi r25,lo8(20)
+ 579 02e8 699F      		mul r22,r25
+ 580 02ea B001      		movw r22,r0
+ 581 02ec 1124      		clr __zero_reg__
+ 582               	.LVL15:
+  76:video.c       **** 			break;
+ 583               		.loc 1 76 34 view .LVU137
+ 584 02ee E60F      		add r30,r22
+ 585 02f0 F72F      		mov r31,r23
+ 586 02f2 F11D      		adc r31,__zero_reg__
+ 587 02f4 E050      		subi r30,lo8(-(frame))
+ 588 02f6 F040      		sbci r31,hi8(-(frame))
+  76:video.c       **** 			break;
+ 589               		.loc 1 76 49 view .LVU138
+ 590 02f8 8770      		andi r24,lo8(7)
+ 591               	.LVL16:
+  76:video.c       **** 			break;
+ 592               		.loc 1 76 43 view .LVU139
+ 593 02fa 20E8      		ldi r18,lo8(-128)
+ 594 02fc 30E0      		ldi r19,0
+ 595 02fe 00C0      		rjmp 2f
+ 596               		1:
+ 597 0300 3595      		asr r19
+ 598 0302 2795      		ror r18
+ 599               		2:
+ 600 0304 8A95      		dec r24
+ 601 0306 02F4      		brpl 1b
+  76:video.c       **** 			break;
+ 602               		.loc 1 76 34 view .LVU140
+ 603 0308 8081      		ld r24,Z
+ 604 030a 8227      		eor r24,r18
+ 605 030c 00C0      		rjmp .L22
+ 606               		.cfi_endproc
+ 607               	.LFE3:
+ 609               	.global	video_set_color
+ 611               	video_set_color:
+ 612               	.LVL17:
+ 613               	.LFB4:
+  83:video.c       **** 	video_color = color;
+ 614               		.loc 1 83 1 is_stmt 1 view -0
+ 615               		.cfi_startproc
+ 616               	/* prologue: function */
+ 617               	/* frame size = 0 */
+ 618               	/* stack size = 0 */
+ 619               	.L__stack_usage = 0
+  84:video.c       **** }
+ 620               		.loc 1 84 2 view .LVU142
+  84:video.c       **** }
+ 621               		.loc 1 84 14 is_stmt 0 view .LVU143
+ 622 030e 8093 0000 		sts video_color,r24
+ 623               	/* epilogue start */
+  85:video.c       **** 
+ 624               		.loc 1 85 1 view .LVU144
+ 625 0312 0895      		ret
+ 626               		.cfi_endproc
+ 627               	.LFE4:
+ 629               	.global	video_set_pixel
+ 631               	video_set_pixel:
+ 632               	.LVL18:
+ 633               	.LFB5:
+  88:video.c       **** 	if(x < PWIDTH && y < HEIGHT)
+ 634               		.loc 1 88 1 is_stmt 1 view -0
+ 635               		.cfi_startproc
+ 636               	/* prologue: function */
+ 637               	/* frame size = 0 */
+ 638               	/* stack size = 0 */
+ 639               	.L__stack_usage = 0
+  89:video.c       **** 	{
+ 640               		.loc 1 89 2 view .LVU146
+  89:video.c       **** 	{
+ 641               		.loc 1 89 4 is_stmt 0 view .LVU147
+ 642 0314 803A      		cpi r24,lo8(-96)
+ 643 0316 00F4      		brsh .L24
+ 644               	.LVL19:
+ 645               	.LBB8:
+ 646               	.LBI8:
+  87:video.c       **** {
+ 647               		.loc 1 87 6 is_stmt 1 view .LVU148
+ 648               	.LBB9:
+  89:video.c       **** 	{
+ 649               		.loc 1 89 16 is_stmt 0 view .LVU149
+ 650 0318 6036      		cpi r22,lo8(96)
+ 651 031a 00F4      		brsh .L24
+  91:video.c       **** 	}
+ 652               		.loc 1 91 3 is_stmt 1 view .LVU150
+ 653 031c 0C94 0000 		jmp video_sp
+ 654               	.LVL20:
+ 655               	.L24:
+ 656               	/* epilogue start */
+  91:video.c       **** 	}
+ 657               		.loc 1 91 3 is_stmt 0 view .LVU151
+ 658               	.LBE9:
+ 659               	.LBE8:
+  93:video.c       **** 
+ 660               		.loc 1 93 1 view .LVU152
+ 661 0320 0895      		ret
+ 662               		.cfi_endproc
+ 663               	.LFE5:
+ 665               	.global	video_get_pixel
+ 667               	video_get_pixel:
+ 668               	.LVL21:
+ 669               	.LFB6:
+  96:video.c       **** 	return(x < PWIDTH && y < HEIGHT &&
+ 670               		.loc 1 96 1 is_stmt 1 view -0
+ 671               		.cfi_startproc
+ 672               	/* prologue: function */
+ 673               	/* frame size = 0 */
+ 674               	/* stack size = 0 */
+ 675               	.L__stack_usage = 0
+  97:video.c       **** 			(frame[x / 8 + y * WIDTH] & (0x80 >> (x & 7))));
+ 676               		.loc 1 97 2 view .LVU154
+  97:video.c       **** 			(frame[x / 8 + y * WIDTH] & (0x80 >> (x & 7))));
+ 677               		.loc 1 97 34 is_stmt 0 view .LVU155
+ 678 0322 803A      		cpi r24,lo8(-96)
+ 679 0324 00F4      		brsh .L30
+  97:video.c       **** 			(frame[x / 8 + y * WIDTH] & (0x80 >> (x & 7))));
+ 680               		.loc 1 97 20 discriminator 1 view .LVU156
+ 681 0326 6036      		cpi r22,lo8(96)
+ 682 0328 00F4      		brsh .L30
+  98:video.c       **** }
+ 683               		.loc 1 98 13 discriminator 3 view .LVU157
+ 684 032a E82F      		mov r30,r24
+ 685 032c E695      		lsr r30
+ 686 032e E695      		lsr r30
+ 687 0330 E695      		lsr r30
+ 688 0332 F0E0      		ldi r31,0
+  98:video.c       **** }
+ 689               		.loc 1 98 10 discriminator 3 view .LVU158
+ 690 0334 E050      		subi r30,lo8(-(frame))
+ 691 0336 F040      		sbci r31,hi8(-(frame))
+ 692 0338 94E1      		ldi r25,lo8(20)
+ 693 033a 699F      		mul r22,r25
+ 694 033c E00D      		add r30,r0
+ 695 033e F11D      		adc r31,r1
+ 696 0340 1124      		clr __zero_reg__
+ 697 0342 2081      		ld r18,Z
+ 698 0344 30E0      		ldi r19,0
+  98:video.c       **** }
+ 699               		.loc 1 98 44 discriminator 3 view .LVU159
+ 700 0346 8770      		andi r24,lo8(7)
+ 701               	.LVL22:
+  98:video.c       **** }
+ 702               		.loc 1 98 38 discriminator 3 view .LVU160
+ 703 0348 40E8      		ldi r20,lo8(-128)
+ 704 034a 50E0      		ldi r21,0
+ 705 034c 00C0      		rjmp 2f
+ 706               		1:
+ 707 034e 5595      		asr r21
+ 708 0350 4795      		ror r20
+ 709               		2:
+ 710 0352 8A95      		dec r24
+ 711 0354 02F4      		brpl 1b
+  98:video.c       **** }
+ 712               		.loc 1 98 30 discriminator 3 view .LVU161
+ 713 0356 2423      		and r18,r20
+ 714 0358 3523      		and r19,r21
+  97:video.c       **** 			(frame[x / 8 + y * WIDTH] & (0x80 >> (x & 7))));
+ 715               		.loc 1 97 34 discriminator 3 view .LVU162
+ 716 035a 81E0      		ldi r24,lo8(1)
+ 717 035c 232B      		or r18,r19
+ 718 035e 01F4      		brne .L27
+ 719               	.L30:
+  97:video.c       **** 			(frame[x / 8 + y * WIDTH] & (0x80 >> (x & 7))));
+ 720               		.loc 1 97 34 view .LVU163
+ 721 0360 80E0      		ldi r24,0
+ 722               	.L27:
+ 723               	/* epilogue start */
+  99:video.c       **** 
+ 724               		.loc 1 99 1 discriminator 8 view .LVU164
+ 725 0362 0895      		ret
+ 726               		.cfi_endproc
+ 727               	.LFE6:
+ 729               	.global	video_clear
+ 731               	video_clear:
+ 732               	.LFB7:
+ 102:video.c       **** 	uint16_t i;
+ 733               		.loc 1 102 1 is_stmt 1 view -0
+ 734               		.cfi_startproc
+ 735               	/* prologue: function */
+ 736               	/* frame size = 0 */
+ 737               	/* stack size = 0 */
+ 738               	.L__stack_usage = 0
+ 103:video.c       **** 	uint8_t val;
+ 739               		.loc 1 103 2 view .LVU166
+ 104:video.c       **** 	switch(video_color)
+ 740               		.loc 1 104 2 view .LVU167
+ 105:video.c       **** 	{
+ 741               		.loc 1 105 2 view .LVU168
+ 742 0364 8091 0000 		lds r24,video_color
+ 743 0368 8130      		cpi r24,lo8(1)
+ 744 036a 01F0      		breq .L38
+ 745 036c 8230      		cpi r24,lo8(2)
+ 746 036e 01F0      		breq .L33
+ 747 0370 8111      		cpse r24,__zero_reg__
+ 748 0372 00C0      		rjmp .L31
+ 749               	.L32:
+ 750               	.LVL23:
+ 133:video.c       **** 	{
+ 751               		.loc 1 133 2 view .LVU169
+ 133:video.c       **** 	{
+ 752               		.loc 1 133 13 view .LVU170
+ 753 0374 E0E0      		ldi r30,lo8(frame)
+ 754 0376 F0E0      		ldi r31,hi8(frame)
+ 755               	.LVL24:
+ 756               	.L36:
+ 135:video.c       **** 	}
+ 757               		.loc 1 135 3 discriminator 3 view .LVU171
+ 135:video.c       **** 	}
+ 758               		.loc 1 135 12 is_stmt 0 discriminator 3 view .LVU172
+ 759 0378 8193      		st Z+,r24
+ 760               	.LVL25:
+ 133:video.c       **** 	{
+ 761               		.loc 1 133 33 is_stmt 1 discriminator 3 view .LVU173
+ 133:video.c       **** 	{
+ 762               		.loc 1 133 13 discriminator 3 view .LVU174
+ 133:video.c       **** 	{
+ 763               		.loc 1 133 2 is_stmt 0 discriminator 3 view .LVU175
+ 764 037a 90E0      		ldi r25,hi8(frame+1920)
+ 765 037c E030      		cpi r30,lo8(frame+1920)
+ 766 037e F907      		cpc r31,r25
+ 767 0380 01F4      		brne .L36
+ 768               	.LVL26:
+ 769               	.L31:
+ 770               	/* epilogue start */
+ 137:video.c       **** 
+ 771               		.loc 1 137 1 view .LVU176
+ 772 0382 0895      		ret
+ 773               	.L33:
+ 774 0384 E0E0      		ldi r30,lo8(frame)
+ 775 0386 F0E0      		ldi r31,hi8(frame)
+ 776               	.L35:
+ 777               	.LVL27:
+ 123:video.c       **** 			}
+ 778               		.loc 1 123 5 is_stmt 1 discriminator 3 view .LVU177
+ 123:video.c       **** 			}
+ 779               		.loc 1 123 22 is_stmt 0 discriminator 3 view .LVU178
+ 780 0388 8191      		ld r24,Z+
+ 781               	.LVL28:
+ 123:video.c       **** 			}
+ 782               		.loc 1 123 14 discriminator 3 view .LVU179
+ 783 038a DF01      		movw r26,r30
+ 784 038c 1197      		sbiw r26,1
+ 785 038e 8095      		com r24
+ 786 0390 8C93      		st X,r24
+ 121:video.c       **** 			{
+ 787               		.loc 1 121 35 is_stmt 1 discriminator 3 view .LVU180
+ 788               	.LVL29:
+ 121:video.c       **** 			{
+ 789               		.loc 1 121 15 discriminator 3 view .LVU181
+ 121:video.c       **** 			{
+ 790               		.loc 1 121 4 is_stmt 0 discriminator 3 view .LVU182
+ 791 0392 80E0      		ldi r24,hi8(frame+1920)
+ 792 0394 E030      		cpi r30,lo8(frame+1920)
+ 793 0396 F807      		cpc r31,r24
+ 794 0398 01F4      		brne .L35
+ 795 039a 0895      		ret
+ 796               	.LVL30:
+ 797               	.L38:
+ 105:video.c       **** 	{
+ 798               		.loc 1 105 2 view .LVU183
+ 799 039c 8FEF      		ldi r24,lo8(-1)
+ 800 039e 00C0      		rjmp .L32
+ 801               		.cfi_endproc
+ 802               	.LFE7:
+ 804               	.global	video_rect
+ 806               	video_rect:
+ 807               	.LVL31:
+ 808               	.LFB8:
+ 140:video.c       **** 	uint8_t ox = x0;
+ 809               		.loc 1 140 1 is_stmt 1 view -0
+ 810               		.cfi_startproc
+ 140:video.c       **** 	uint8_t ox = x0;
+ 811               		.loc 1 140 1 is_stmt 0 view .LVU185
+ 812 03a0 FF92      		push r15
+ 813               	.LCFI3:
+ 814               		.cfi_def_cfa_offset 3
+ 815               		.cfi_offset 15, -2
+ 816 03a2 0F93      		push r16
+ 817               	.LCFI4:
+ 818               		.cfi_def_cfa_offset 4
+ 819               		.cfi_offset 16, -3
+ 820 03a4 1F93      		push r17
+ 821               	.LCFI5:
+ 822               		.cfi_def_cfa_offset 5
+ 823               		.cfi_offset 17, -4
+ 824 03a6 CF93      		push r28
+ 825               	.LCFI6:
+ 826               		.cfi_def_cfa_offset 6
+ 827               		.cfi_offset 28, -5
+ 828 03a8 DF93      		push r29
+ 829               	.LCFI7:
+ 830               		.cfi_def_cfa_offset 7
+ 831               		.cfi_offset 29, -6
+ 832               	/* prologue: function */
+ 833               	/* frame size = 0 */
+ 834               	/* stack size = 5 */
+ 835               	.L__stack_usage = 5
+ 836 03aa F82E      		mov r15,r24
+ 837 03ac C62F      		mov r28,r22
+ 838 03ae 142F      		mov r17,r20
+ 839 03b0 D22F      		mov r29,r18
+ 141:video.c       **** 	if(x0 >= PWIDTH) { x0 = PWIDTH - 1; }
+ 840               		.loc 1 141 2 is_stmt 1 view .LVU186
+ 841               	.LVL32:
+ 142:video.c       **** 	if(y0 >= HEIGHT) { y0 = HEIGHT - 1; }
+ 842               		.loc 1 142 2 view .LVU187
+ 843 03b2 082F      		mov r16,r24
+ 844 03b4 8FE9      		ldi r24,lo8(-97)
+ 845               	.LVL33:
+ 142:video.c       **** 	if(y0 >= HEIGHT) { y0 = HEIGHT - 1; }
+ 846               		.loc 1 142 2 is_stmt 0 view .LVU188
+ 847 03b6 8F15      		cp r24,r15
+ 848 03b8 00F4      		brsh .L45
+ 849 03ba 0FE9      		ldi r16,lo8(-97)
+ 850               	.L45:
+ 851               	.LVL34:
+ 143:video.c       **** 	if(x1 >= PWIDTH) { x1 = PWIDTH - 1; }
+ 852               		.loc 1 143 2 is_stmt 1 view .LVU189
+ 853 03bc C036      		cpi r28,lo8(96)
+ 854 03be 00F0      		brlo .L46
+ 855 03c0 CFE5      		ldi r28,lo8(95)
+ 856               	.L46:
+ 857               	.LVL35:
+ 144:video.c       **** 	if(y1 >= HEIGHT) { y1 = HEIGHT - 1; }
+ 858               		.loc 1 144 2 view .LVU190
+ 859 03c2 103A      		cpi r17,lo8(-96)
+ 860 03c4 00F0      		brlo .L47
+ 861 03c6 1FE9      		ldi r17,lo8(-97)
+ 862               	.L47:
+ 863               	.LVL36:
+ 145:video.c       **** 	while(y0 < y1)
+ 864               		.loc 1 145 2 view .LVU191
+ 865 03c8 D036      		cpi r29,lo8(96)
+ 866 03ca 00F0      		brlo .L49
+ 867 03cc DFE5      		ldi r29,lo8(95)
+ 868               	.LVL37:
+ 869               	.L49:
+ 146:video.c       **** 	{
+ 870               		.loc 1 146 7 view .LVU192
+ 871 03ce CD17      		cp r28,r29
+ 872 03d0 00F0      		brlo .L51
+ 158:video.c       **** }
+ 873               		.loc 1 158 2 view .LVU193
+ 158:video.c       **** }
+ 874               		.loc 1 158 11 is_stmt 0 view .LVU194
+ 875 03d2 8FEF      		ldi r24,lo8(-1)
+ 876 03d4 8093 0000 		sts frame,r24
+ 877               	/* epilogue start */
+ 159:video.c       **** 
+ 878               		.loc 1 159 1 view .LVU195
+ 879 03d8 DF91      		pop r29
+ 880               	.LVL38:
+ 159:video.c       **** 
+ 881               		.loc 1 159 1 view .LVU196
+ 882 03da CF91      		pop r28
+ 883               	.LVL39:
+ 159:video.c       **** 
+ 884               		.loc 1 159 1 view .LVU197
+ 885 03dc 1F91      		pop r17
+ 886               	.LVL40:
+ 159:video.c       **** 
+ 887               		.loc 1 159 1 view .LVU198
+ 888 03de 0F91      		pop r16
+ 889               	.LVL41:
+ 159:video.c       **** 
+ 890               		.loc 1 159 1 view .LVU199
+ 891 03e0 FF90      		pop r15
+ 892               	.LVL42:
+ 159:video.c       **** 
+ 893               		.loc 1 159 1 view .LVU200
+ 894 03e2 0895      		ret
+ 895               	.LVL43:
+ 896               	.L50:
+ 150:video.c       **** 			++x0;
+ 897               		.loc 1 150 4 is_stmt 1 view .LVU201
+ 898 03e4 6C2F      		mov r22,r28
+ 899 03e6 802F      		mov r24,r16
+ 900 03e8 0E94 0000 		call video_sp
+ 901               	.LVL44:
+ 151:video.c       **** 		}
+ 902               		.loc 1 151 4 view .LVU202
+ 903 03ec 0F5F      		subi r16,lo8(-(1))
+ 904               	.LVL45:
+ 905               	.L51:
+ 148:video.c       **** 		{
+ 906               		.loc 1 148 8 view .LVU203
+ 907 03ee 0117      		cp r16,r17
+ 908 03f0 00F0      		brlo .L50
+ 154:video.c       **** 		++y0;
+ 909               		.loc 1 154 3 view .LVU204
+ 910               	.LVL46:
+ 155:video.c       **** 	}
+ 911               		.loc 1 155 3 view .LVU205
+ 912 03f2 CF5F      		subi r28,lo8(-(1))
+ 913               	.LVL47:
+ 154:video.c       **** 		++y0;
+ 914               		.loc 1 154 6 is_stmt 0 view .LVU206
+ 915 03f4 0F2D      		mov r16,r15
+ 916 03f6 00C0      		rjmp .L49
+ 917               		.cfi_endproc
+ 918               	.LFE8:
+ 920               	.global	video_circle
+ 922               	video_circle:
+ 923               	.LVL48:
+ 924               	.LFB9:
+ 162:video.c       **** 	int16_t x = radius - 1, y = 0, dx = 1, dy = 1,
+ 925               		.loc 1 162 1 is_stmt 1 view -0
+ 926               		.cfi_startproc
+ 162:video.c       **** 	int16_t x = radius - 1, y = 0, dx = 1, dy = 1,
+ 927               		.loc 1 162 1 is_stmt 0 view .LVU208
+ 928 03f8 2F92      		push r2
+ 929               	.LCFI8:
+ 930               		.cfi_def_cfa_offset 3
+ 931               		.cfi_offset 2, -2
+ 932 03fa 3F92      		push r3
+ 933               	.LCFI9:
+ 934               		.cfi_def_cfa_offset 4
+ 935               		.cfi_offset 3, -3
+ 936 03fc 4F92      		push r4
+ 937               	.LCFI10:
+ 938               		.cfi_def_cfa_offset 5
+ 939               		.cfi_offset 4, -4
+ 940 03fe 5F92      		push r5
+ 941               	.LCFI11:
+ 942               		.cfi_def_cfa_offset 6
+ 943               		.cfi_offset 5, -5
+ 944 0400 6F92      		push r6
+ 945               	.LCFI12:
+ 946               		.cfi_def_cfa_offset 7
+ 947               		.cfi_offset 6, -6
+ 948 0402 7F92      		push r7
+ 949               	.LCFI13:
+ 950               		.cfi_def_cfa_offset 8
+ 951               		.cfi_offset 7, -7
+ 952 0404 8F92      		push r8
+ 953               	.LCFI14:
+ 954               		.cfi_def_cfa_offset 9
+ 955               		.cfi_offset 8, -8
+ 956 0406 9F92      		push r9
+ 957               	.LCFI15:
+ 958               		.cfi_def_cfa_offset 10
+ 959               		.cfi_offset 9, -9
+ 960 0408 AF92      		push r10
+ 961               	.LCFI16:
+ 962               		.cfi_def_cfa_offset 11
+ 963               		.cfi_offset 10, -10
+ 964 040a BF92      		push r11
+ 965               	.LCFI17:
+ 966               		.cfi_def_cfa_offset 12
+ 967               		.cfi_offset 11, -11
+ 968 040c CF92      		push r12
+ 969               	.LCFI18:
+ 970               		.cfi_def_cfa_offset 13
+ 971               		.cfi_offset 12, -12
+ 972 040e DF92      		push r13
+ 973               	.LCFI19:
+ 974               		.cfi_def_cfa_offset 14
+ 975               		.cfi_offset 13, -13
+ 976 0410 EF92      		push r14
+ 977               	.LCFI20:
+ 978               		.cfi_def_cfa_offset 15
+ 979               		.cfi_offset 14, -14
+ 980 0412 FF92      		push r15
+ 981               	.LCFI21:
+ 982               		.cfi_def_cfa_offset 16
+ 983               		.cfi_offset 15, -15
+ 984 0414 0F93      		push r16
+ 985               	.LCFI22:
+ 986               		.cfi_def_cfa_offset 17
+ 987               		.cfi_offset 16, -16
+ 988 0416 1F93      		push r17
+ 989               	.LCFI23:
+ 990               		.cfi_def_cfa_offset 18
+ 991               		.cfi_offset 17, -17
+ 992 0418 CF93      		push r28
+ 993               	.LCFI24:
+ 994               		.cfi_def_cfa_offset 19
+ 995               		.cfi_offset 28, -18
+ 996 041a DF93      		push r29
+ 997               	.LCFI25:
+ 998               		.cfi_def_cfa_offset 20
+ 999               		.cfi_offset 29, -19
+ 1000 041c 00D0      		rcall .
+ 1001 041e 0F92      		push __tmp_reg__
+ 1002               	.LCFI26:
+ 1003               		.cfi_def_cfa_offset 23
+ 1004 0420 CDB7      		in r28,__SP_L__
+ 1005 0422 DEB7      		in r29,__SP_H__
+ 1006               	.LCFI27:
+ 1007               		.cfi_def_cfa_register 28
+ 1008               	/* prologue: function */
+ 1009               	/* frame size = 3 */
+ 1010               	/* stack size = 21 */
+ 1011               	.L__stack_usage = 21
+ 1012 0424 682E      		mov r6,r24
+ 1013 0426 762E      		mov r7,r22
+ 1014 0428 6A01      		movw r12,r20
+ 163:video.c       **** 	err = dx - (radius << 1);
+ 1015               		.loc 1 163 2 is_stmt 1 view .LVU209
+ 163:video.c       **** 	err = dx - (radius << 1);
+ 1016               		.loc 1 163 10 is_stmt 0 view .LVU210
+ 1017 042a 7A01      		movw r14,r20
+ 1018 042c 21E0      		ldi r18,1
+ 1019 042e E21A      		sub r14,r18
+ 1020 0430 F108      		sbc r15,__zero_reg__
+ 1021               	.LVL49:
+ 164:video.c       **** 	while(x >= y)
+ 1022               		.loc 1 164 21 view .LVU211
+ 1023 0432 CC0C      		lsl r12
+ 1024 0434 DD1C      		rol r13
+ 1025               	.LVL50:
+ 164:video.c       **** 	while(x >= y)
+ 1026               		.loc 1 164 2 view .LVU212
+ 1027 0436 81E0      		ldi r24,lo8(1)
+ 1028 0438 90E0      		ldi r25,0
+ 1029 043a 8C19      		sub r24,r12
+ 1030 043c 9D09      		sbc r25,r13
+ 1031 043e 9B83      		std Y+3,r25
+ 1032 0440 8A83      		std Y+2,r24
+ 1033               	.LVL51:
+ 165:video.c       **** 	{
+ 1034               		.loc 1 165 2 is_stmt 1 view .LVU213
+ 163:video.c       **** 	err = dx - (radius << 1);
+ 1035               		.loc 1 163 41 is_stmt 0 view .LVU214
+ 1036 0442 8824      		clr r8
+ 1037 0444 8394      		inc r8
+ 1038 0446 912C      		mov r9,__zero_reg__
+ 163:video.c       **** 	err = dx - (radius << 1);
+ 1039               		.loc 1 163 33 view .LVU215
+ 1040 0448 AA24      		clr r10
+ 1041 044a A394      		inc r10
+ 1042 044c B12C      		mov r11,__zero_reg__
+ 163:video.c       **** 	err = dx - (radius << 1);
+ 1043               		.loc 1 163 26 view .LVU216
+ 1044 044e 10E0      		ldi r17,0
+ 1045 0450 00E0      		ldi r16,0
+ 1046               	.LVL52:
+ 1047               	.L54:
+ 165:video.c       **** 	{
+ 1048               		.loc 1 165 7 is_stmt 1 view .LVU217
+ 1049 0452 E016      		cp r14,r16
+ 1050 0454 F106      		cpc r15,r17
+ 1051 0456 04F4      		brge .L57
+ 1052               	/* epilogue start */
+ 190:video.c       **** 
+ 1053               		.loc 1 190 1 is_stmt 0 view .LVU218
+ 1054 0458 0F90      		pop __tmp_reg__
+ 1055 045a 0F90      		pop __tmp_reg__
+ 1056 045c 0F90      		pop __tmp_reg__
+ 1057 045e DF91      		pop r29
+ 1058 0460 CF91      		pop r28
+ 1059               	.LVL53:
+ 190:video.c       **** 
+ 1060               		.loc 1 190 1 view .LVU219
+ 1061 0462 1F91      		pop r17
+ 1062               	.LVL54:
+ 190:video.c       **** 
+ 1063               		.loc 1 190 1 view .LVU220
+ 1064 0464 0F91      		pop r16
+ 1065               	.LVL55:
+ 190:video.c       **** 
+ 1066               		.loc 1 190 1 view .LVU221
+ 1067 0466 FF90      		pop r15
+ 1068               	.LVL56:
+ 190:video.c       **** 
+ 1069               		.loc 1 190 1 view .LVU222
+ 1070 0468 EF90      		pop r14
+ 1071               	.LVL57:
+ 190:video.c       **** 
+ 1072               		.loc 1 190 1 view .LVU223
+ 1073 046a DF90      		pop r13
+ 1074               	.LVL58:
+ 190:video.c       **** 
+ 1075               		.loc 1 190 1 view .LVU224
+ 1076 046c CF90      		pop r12
+ 1077               	.LVL59:
+ 190:video.c       **** 
+ 1078               		.loc 1 190 1 view .LVU225
+ 1079 046e BF90      		pop r11
+ 1080               	.LVL60:
+ 190:video.c       **** 
+ 1081               		.loc 1 190 1 view .LVU226
+ 1082 0470 AF90      		pop r10
+ 1083               	.LVL61:
+ 190:video.c       **** 
+ 1084               		.loc 1 190 1 view .LVU227
+ 1085 0472 9F90      		pop r9
+ 1086               	.LVL62:
+ 190:video.c       **** 
+ 1087               		.loc 1 190 1 view .LVU228
+ 1088 0474 8F90      		pop r8
+ 1089               	.LVL63:
+ 190:video.c       **** 
+ 1090               		.loc 1 190 1 view .LVU229
+ 1091 0476 7F90      		pop r7
+ 1092               	.LVL64:
+ 190:video.c       **** 
+ 1093               		.loc 1 190 1 view .LVU230
+ 1094 0478 6F90      		pop r6
+ 1095               	.LVL65:
+ 190:video.c       **** 
+ 1096               		.loc 1 190 1 view .LVU231
+ 1097 047a 5F90      		pop r5
+ 1098               	.LVL66:
+ 190:video.c       **** 
+ 1099               		.loc 1 190 1 view .LVU232
+ 1100 047c 4F90      		pop r4
+ 1101               	.LVL67:
+ 190:video.c       **** 
+ 1102               		.loc 1 190 1 view .LVU233
+ 1103 047e 3F90      		pop r3
+ 1104               	.LVL68:
+ 190:video.c       **** 
+ 1105               		.loc 1 190 1 view .LVU234
+ 1106 0480 2F90      		pop r2
+ 1107               	.LVL69:
+ 190:video.c       **** 
+ 1108               		.loc 1 190 1 view .LVU235
+ 1109 0482 0895      		ret
+ 1110               	.LVL70:
+ 1111               	.L57:
+ 167:video.c       **** 		video_set_pixel(x0 + y, y0 + x);
+ 1112               		.loc 1 167 3 is_stmt 1 view .LVU236
+ 1113 0484 372C      		mov r3,r7
+ 1114 0486 300E      		add r3,r16
+ 1115 0488 632D      		mov r22,r3
+ 1116 048a 962D      		mov r25,r6
+ 1117 048c 9E0D      		add r25,r14
+ 1118 048e 9983      		std Y+1,r25
+ 1119 0490 892F      		mov r24,r25
+ 1120 0492 0E94 0000 		call video_set_pixel
+ 1121               	.LVL71:
+ 168:video.c       **** 		video_set_pixel(x0 - y, y0 + x);
+ 1122               		.loc 1 168 3 view .LVU237
+ 1123 0496 472C      		mov r4,r7
+ 1124 0498 4E0C      		add r4,r14
+ 1125 049a 642D      		mov r22,r4
+ 1126 049c 562C      		mov r5,r6
+ 1127 049e 500E      		add r5,r16
+ 1128 04a0 852D      		mov r24,r5
+ 1129 04a2 0E94 0000 		call video_set_pixel
+ 1130               	.LVL72:
+ 169:video.c       **** 		video_set_pixel(x0 - x, y0 + y);
+ 1131               		.loc 1 169 3 view .LVU238
+ 1132 04a6 642D      		mov r22,r4
+ 1133 04a8 462C      		mov r4,r6
+ 1134 04aa 401A      		sub r4,r16
+ 1135 04ac 842D      		mov r24,r4
+ 1136 04ae 0E94 0000 		call video_set_pixel
+ 1137               	.LVL73:
+ 170:video.c       **** 		video_set_pixel(x0 - x, y0 - y);
+ 1138               		.loc 1 170 3 view .LVU239
+ 1139 04b2 632D      		mov r22,r3
+ 1140 04b4 362C      		mov r3,r6
+ 1141 04b6 3E18      		sub r3,r14
+ 1142 04b8 832D      		mov r24,r3
+ 1143 04ba 0E94 0000 		call video_set_pixel
+ 1144               	.LVL74:
+ 171:video.c       **** 		video_set_pixel(x0 - y, y0 - x);
+ 1145               		.loc 1 171 3 view .LVU240
+ 1146 04be 272C      		mov r2,r7
+ 1147 04c0 201A      		sub r2,r16
+ 1148 04c2 622D      		mov r22,r2
+ 1149 04c4 832D      		mov r24,r3
+ 1150 04c6 0E94 0000 		call video_set_pixel
+ 1151               	.LVL75:
+ 172:video.c       **** 		video_set_pixel(x0 + y, y0 - x);
+ 1152               		.loc 1 172 3 view .LVU241
+ 1153 04ca 372C      		mov r3,r7
+ 1154 04cc 3E18      		sub r3,r14
+ 1155 04ce 632D      		mov r22,r3
+ 1156 04d0 842D      		mov r24,r4
+ 1157 04d2 0E94 0000 		call video_set_pixel
+ 1158               	.LVL76:
+ 173:video.c       **** 		video_set_pixel(x0 + x, y0 - y);
+ 1159               		.loc 1 173 3 view .LVU242
+ 1160 04d6 632D      		mov r22,r3
+ 1161 04d8 852D      		mov r24,r5
+ 1162 04da 0E94 0000 		call video_set_pixel
+ 1163               	.LVL77:
+ 174:video.c       **** 
+ 1164               		.loc 1 174 3 view .LVU243
+ 1165 04de 622D      		mov r22,r2
+ 1166 04e0 8981      		ldd r24,Y+1
+ 1167 04e2 0E94 0000 		call video_set_pixel
+ 1168               	.LVL78:
+ 176:video.c       **** 		{
+ 1169               		.loc 1 176 3 view .LVU244
+ 176:video.c       **** 		{
+ 1170               		.loc 1 176 5 is_stmt 0 view .LVU245
+ 1171 04e6 2A81      		ldd r18,Y+2
+ 1172 04e8 3B81      		ldd r19,Y+3
+ 1173 04ea 1216      		cp __zero_reg__,r18
+ 1174 04ec 1306      		cpc __zero_reg__,r19
+ 1175 04ee 04F0      		brlt .L55
+ 178:video.c       **** 			err += dy;
+ 1176               		.loc 1 178 4 is_stmt 1 view .LVU246
+ 1177 04f0 0F5F      		subi r16,-1
+ 1178 04f2 1F4F      		sbci r17,-1
+ 1179               	.LVL79:
+ 179:video.c       **** 			dy += 2;
+ 1180               		.loc 1 179 4 view .LVU247
+ 179:video.c       **** 			dy += 2;
+ 1181               		.loc 1 179 8 is_stmt 0 view .LVU248
+ 1182 04f4 280D      		add r18,r8
+ 1183 04f6 391D      		adc r19,r9
+ 1184 04f8 3B83      		std Y+3,r19
+ 1185 04fa 2A83      		std Y+2,r18
+ 1186               	.LVL80:
+ 180:video.c       **** 		}
+ 1187               		.loc 1 180 4 is_stmt 1 view .LVU249
+ 180:video.c       **** 		}
+ 1188               		.loc 1 180 7 is_stmt 0 view .LVU250
+ 1189 04fc 32E0      		ldi r19,2
+ 1190 04fe 830E      		add r8,r19
+ 1191 0500 911C      		adc r9,__zero_reg__
+ 1192               	.LVL81:
+ 183:video.c       **** 		{
+ 1193               		.loc 1 183 3 is_stmt 1 view .LVU251
+ 183:video.c       **** 		{
+ 1194               		.loc 1 183 5 is_stmt 0 view .LVU252
+ 1195 0502 8A81      		ldd r24,Y+2
+ 1196 0504 9B81      		ldd r25,Y+3
+ 1197 0506 1816      		cp __zero_reg__,r24
+ 1198 0508 1906      		cpc __zero_reg__,r25
+ 1199 050a 04F0      		brlt .+2
+ 1200 050c 00C0      		rjmp .L54
+ 1201               	.LVL82:
+ 1202               	.L55:
+ 185:video.c       **** 			dx += 2;
+ 1203               		.loc 1 185 4 is_stmt 1 view .LVU253
+ 1204 050e 91E0      		ldi r25,1
+ 1205 0510 E91A      		sub r14,r25
+ 1206 0512 F108      		sbc r15,__zero_reg__
+ 1207               	.LVL83:
+ 186:video.c       **** 			err += dx - (radius << 1);
+ 1208               		.loc 1 186 4 view .LVU254
+ 186:video.c       **** 			err += dx - (radius << 1);
+ 1209               		.loc 1 186 7 is_stmt 0 view .LVU255
+ 1210 0514 22E0      		ldi r18,2
+ 1211 0516 A20E      		add r10,r18
+ 1212 0518 B11C      		adc r11,__zero_reg__
+ 1213               	.LVL84:
+ 187:video.c       **** 		}
+ 1214               		.loc 1 187 4 is_stmt 1 view .LVU256
+ 187:video.c       **** 		}
+ 1215               		.loc 1 187 14 is_stmt 0 view .LVU257
+ 1216 051a C501      		movw r24,r10
+ 1217 051c 8C19      		sub r24,r12
+ 1218 051e 9D09      		sbc r25,r13
+ 187:video.c       **** 		}
+ 1219               		.loc 1 187 8 view .LVU258
+ 1220 0520 2A81      		ldd r18,Y+2
+ 1221 0522 3B81      		ldd r19,Y+3
+ 1222 0524 280F      		add r18,r24
+ 1223 0526 391F      		adc r19,r25
+ 1224 0528 3B83      		std Y+3,r19
+ 1225 052a 2A83      		std Y+2,r18
+ 1226               	.LVL85:
+ 187:video.c       **** 		}
+ 1227               		.loc 1 187 8 view .LVU259
+ 1228 052c 00C0      		rjmp .L54
+ 1229               		.cfi_endproc
+ 1230               	.LFE9:
+ 1232               	.global	video_hline
+ 1234               	video_hline:
+ 1235               	.LVL86:
+ 1236               	.LFB10:
+ 193:video.c       **** 	uint8_t e;
+ 1237               		.loc 1 193 1 is_stmt 1 view -0
+ 1238               		.cfi_startproc
+ 193:video.c       **** 	uint8_t e;
+ 1239               		.loc 1 193 1 is_stmt 0 view .LVU261
+ 1240 052e 1F93      		push r17
+ 1241               	.LCFI28:
+ 1242               		.cfi_def_cfa_offset 3
+ 1243               		.cfi_offset 17, -2
+ 1244 0530 CF93      		push r28
+ 1245               	.LCFI29:
+ 1246               		.cfi_def_cfa_offset 4
+ 1247               		.cfi_offset 28, -3
+ 1248 0532 DF93      		push r29
+ 1249               	.LCFI30:
+ 1250               		.cfi_def_cfa_offset 5
+ 1251               		.cfi_offset 29, -4
+ 1252               	/* prologue: function */
+ 1253               	/* frame size = 0 */
+ 1254               	/* stack size = 3 */
+ 1255               	.L__stack_usage = 3
+ 1256 0534 C82F      		mov r28,r24
+ 1257 0536 162F      		mov r17,r22
+ 1258 0538 D42F      		mov r29,r20
+ 194:video.c       **** 	if(x < PWIDTH && y < HEIGHT && (e = x + l) < PWIDTH)
+ 1259               		.loc 1 194 2 is_stmt 1 view .LVU262
+ 195:video.c       **** 	{
+ 1260               		.loc 1 195 2 view .LVU263
+ 195:video.c       **** 	{
+ 1261               		.loc 1 195 4 is_stmt 0 view .LVU264
+ 1262 053a 803A      		cpi r24,lo8(-96)
+ 1263 053c 00F4      		brsh .L58
+ 195:video.c       **** 	{
+ 1264               		.loc 1 195 16 discriminator 1 view .LVU265
+ 1265 053e 6036      		cpi r22,lo8(96)
+ 1266 0540 00F4      		brsh .L58
+ 195:video.c       **** 	{
+ 1267               		.loc 1 195 36 discriminator 2 view .LVU266
+ 1268 0542 D80F      		add r29,r24
+ 1269               	.LVL87:
+ 195:video.c       **** 	{
+ 1270               		.loc 1 195 30 discriminator 2 view .LVU267
+ 1271 0544 D03A      		cpi r29,lo8(-96)
+ 1272 0546 00F0      		brlo .L61
+ 1273               	.LVL88:
+ 1274               	.L58:
+ 1275               	/* epilogue start */
+ 202:video.c       **** 
+ 1276               		.loc 1 202 1 view .LVU268
+ 1277 0548 DF91      		pop r29
+ 1278 054a CF91      		pop r28
+ 1279               	.LVL89:
+ 202:video.c       **** 
+ 1280               		.loc 1 202 1 view .LVU269
+ 1281 054c 1F91      		pop r17
+ 1282               	.LVL90:
+ 202:video.c       **** 
+ 1283               		.loc 1 202 1 view .LVU270
+ 1284 054e 0895      		ret
+ 1285               	.LVL91:
+ 1286               	.L62:
+ 199:video.c       **** 		}
+ 1287               		.loc 1 199 4 is_stmt 1 discriminator 2 view .LVU271
+ 1288 0550 612F      		mov r22,r17
+ 1289 0552 8C2F      		mov r24,r28
+ 1290 0554 0E94 0000 		call video_sp
+ 1291               	.LVL92:
+ 197:video.c       **** 		{
+ 1292               		.loc 1 197 16 discriminator 2 view .LVU272
+ 1293 0558 CF5F      		subi r28,lo8(-(1))
+ 1294               	.LVL93:
+ 1295               	.L61:
+ 197:video.c       **** 		{
+ 1296               		.loc 1 197 9 discriminator 1 view .LVU273
+ 197:video.c       **** 		{
+ 1297               		.loc 1 197 3 is_stmt 0 discriminator 1 view .LVU274
+ 1298 055a CD17      		cp r28,r29
+ 1299 055c 00F0      		brlo .L62
+ 197:video.c       **** 		{
+ 1300               		.loc 1 197 3 discriminator 1 view .LVU275
+ 1301 055e 00C0      		rjmp .L58
+ 1302               		.cfi_endproc
+ 1303               	.LFE10:
+ 1305               	.global	video_vline
+ 1307               	video_vline:
+ 1308               	.LVL94:
+ 1309               	.LFB11:
+ 205:video.c       **** 	uint8_t e;
+ 1310               		.loc 1 205 1 is_stmt 1 view -0
+ 1311               		.cfi_startproc
+ 205:video.c       **** 	uint8_t e;
+ 1312               		.loc 1 205 1 is_stmt 0 view .LVU277
+ 1313 0560 1F93      		push r17
+ 1314               	.LCFI31:
+ 1315               		.cfi_def_cfa_offset 3
+ 1316               		.cfi_offset 17, -2
+ 1317 0562 CF93      		push r28
+ 1318               	.LCFI32:
+ 1319               		.cfi_def_cfa_offset 4
+ 1320               		.cfi_offset 28, -3
+ 1321 0564 DF93      		push r29
+ 1322               	.LCFI33:
+ 1323               		.cfi_def_cfa_offset 5
+ 1324               		.cfi_offset 29, -4
+ 1325               	/* prologue: function */
+ 1326               	/* frame size = 0 */
+ 1327               	/* stack size = 3 */
+ 1328               	.L__stack_usage = 3
+ 1329 0566 182F      		mov r17,r24
+ 1330 0568 C62F      		mov r28,r22
+ 1331 056a D42F      		mov r29,r20
+ 206:video.c       **** 	if(x < PWIDTH && y < HEIGHT && (e = y + l) < HEIGHT)
+ 1332               		.loc 1 206 2 is_stmt 1 view .LVU278
+ 207:video.c       **** 	{
+ 1333               		.loc 1 207 2 view .LVU279
+ 207:video.c       **** 	{
+ 1334               		.loc 1 207 4 is_stmt 0 view .LVU280
+ 1335 056c 803A      		cpi r24,lo8(-96)
+ 1336 056e 00F4      		brsh .L64
+ 207:video.c       **** 	{
+ 1337               		.loc 1 207 16 discriminator 1 view .LVU281
+ 1338 0570 6036      		cpi r22,lo8(96)
+ 1339 0572 00F4      		brsh .L64
+ 207:video.c       **** 	{
+ 1340               		.loc 1 207 36 discriminator 2 view .LVU282
+ 1341 0574 D60F      		add r29,r22
+ 1342               	.LVL95:
+ 207:video.c       **** 	{
+ 1343               		.loc 1 207 30 discriminator 2 view .LVU283
+ 1344 0576 D036      		cpi r29,lo8(96)
+ 1345 0578 00F0      		brlo .L67
+ 1346               	.LVL96:
+ 1347               	.L64:
+ 1348               	/* epilogue start */
+ 214:video.c       **** 
+ 1349               		.loc 1 214 1 view .LVU284
+ 1350 057a DF91      		pop r29
+ 1351 057c CF91      		pop r28
+ 1352               	.LVL97:
+ 214:video.c       **** 
+ 1353               		.loc 1 214 1 view .LVU285
+ 1354 057e 1F91      		pop r17
+ 1355               	.LVL98:
+ 214:video.c       **** 
+ 1356               		.loc 1 214 1 view .LVU286
+ 1357 0580 0895      		ret
+ 1358               	.LVL99:
+ 1359               	.L68:
+ 211:video.c       **** 		}
+ 1360               		.loc 1 211 4 is_stmt 1 discriminator 2 view .LVU287
+ 1361 0582 6C2F      		mov r22,r28
+ 1362 0584 812F      		mov r24,r17
+ 1363 0586 0E94 0000 		call video_sp
+ 1364               	.LVL100:
+ 209:video.c       **** 		{
+ 1365               		.loc 1 209 16 discriminator 2 view .LVU288
+ 1366 058a CF5F      		subi r28,lo8(-(1))
+ 1367               	.LVL101:
+ 1368               	.L67:
+ 209:video.c       **** 		{
+ 1369               		.loc 1 209 9 discriminator 1 view .LVU289
+ 209:video.c       **** 		{
+ 1370               		.loc 1 209 3 is_stmt 0 discriminator 1 view .LVU290
+ 1371 058c CD17      		cp r28,r29
+ 1372 058e 00F0      		brlo .L68
+ 209:video.c       **** 		{
+ 1373               		.loc 1 209 3 discriminator 1 view .LVU291
+ 1374 0590 00C0      		rjmp .L64
+ 1375               		.cfi_endproc
+ 1376               	.LFE11:
+ 1378               	.global	video_line
+ 1380               	video_line:
+ 1381               	.LVL102:
+ 1382               	.LFB12:
+ 217:video.c       **** 	int16_t dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+ 1383               		.loc 1 217 1 is_stmt 1 view -0
+ 1384               		.cfi_startproc
+ 217:video.c       **** 	int16_t dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+ 1385               		.loc 1 217 1 is_stmt 0 view .LVU293
+ 1386 0592 2F92      		push r2
+ 1387               	.LCFI34:
+ 1388               		.cfi_def_cfa_offset 3
+ 1389               		.cfi_offset 2, -2
+ 1390 0594 3F92      		push r3
+ 1391               	.LCFI35:
+ 1392               		.cfi_def_cfa_offset 4
+ 1393               		.cfi_offset 3, -3
+ 1394 0596 4F92      		push r4
+ 1395               	.LCFI36:
+ 1396               		.cfi_def_cfa_offset 5
+ 1397               		.cfi_offset 4, -4
+ 1398 0598 5F92      		push r5
+ 1399               	.LCFI37:
+ 1400               		.cfi_def_cfa_offset 6
+ 1401               		.cfi_offset 5, -5
+ 1402 059a 6F92      		push r6
+ 1403               	.LCFI38:
+ 1404               		.cfi_def_cfa_offset 7
+ 1405               		.cfi_offset 6, -6
+ 1406 059c 7F92      		push r7
+ 1407               	.LCFI39:
+ 1408               		.cfi_def_cfa_offset 8
+ 1409               		.cfi_offset 7, -7
+ 1410 059e 8F92      		push r8
+ 1411               	.LCFI40:
+ 1412               		.cfi_def_cfa_offset 9
+ 1413               		.cfi_offset 8, -8
+ 1414 05a0 9F92      		push r9
+ 1415               	.LCFI41:
+ 1416               		.cfi_def_cfa_offset 10
+ 1417               		.cfi_offset 9, -9
+ 1418 05a2 AF92      		push r10
+ 1419               	.LCFI42:
+ 1420               		.cfi_def_cfa_offset 11
+ 1421               		.cfi_offset 10, -10
+ 1422 05a4 BF92      		push r11
+ 1423               	.LCFI43:
+ 1424               		.cfi_def_cfa_offset 12
+ 1425               		.cfi_offset 11, -11
+ 1426 05a6 CF92      		push r12
+ 1427               	.LCFI44:
+ 1428               		.cfi_def_cfa_offset 13
+ 1429               		.cfi_offset 12, -12
+ 1430 05a8 DF92      		push r13
+ 1431               	.LCFI45:
+ 1432               		.cfi_def_cfa_offset 14
+ 1433               		.cfi_offset 13, -13
+ 1434 05aa EF92      		push r14
+ 1435               	.LCFI46:
+ 1436               		.cfi_def_cfa_offset 15
+ 1437               		.cfi_offset 14, -14
+ 1438 05ac FF92      		push r15
+ 1439               	.LCFI47:
+ 1440               		.cfi_def_cfa_offset 16
+ 1441               		.cfi_offset 15, -15
+ 1442 05ae 0F93      		push r16
+ 1443               	.LCFI48:
+ 1444               		.cfi_def_cfa_offset 17
+ 1445               		.cfi_offset 16, -16
+ 1446 05b0 1F93      		push r17
+ 1447               	.LCFI49:
+ 1448               		.cfi_def_cfa_offset 18
+ 1449               		.cfi_offset 17, -17
+ 1450 05b2 CF93      		push r28
+ 1451               	.LCFI50:
+ 1452               		.cfi_def_cfa_offset 19
+ 1453               		.cfi_offset 28, -18
+ 1454 05b4 DF93      		push r29
+ 1455               	.LCFI51:
+ 1456               		.cfi_def_cfa_offset 20
+ 1457               		.cfi_offset 29, -19
+ 1458 05b6 00D0      		rcall .
+ 1459 05b8 00D0      		rcall .
+ 1460               	.LCFI52:
+ 1461               		.cfi_def_cfa_offset 24
+ 1462 05ba CDB7      		in r28,__SP_L__
+ 1463 05bc DEB7      		in r29,__SP_H__
+ 1464               	.LCFI53:
+ 1465               		.cfi_def_cfa_register 28
+ 1466               	/* prologue: function */
+ 1467               	/* frame size = 4 */
+ 1468               	/* stack size = 22 */
+ 1469               	.L__stack_usage = 22
+ 1470 05be 7C01      		movw r14,r24
+ 1471 05c0 8B01      		movw r16,r22
+ 1472 05c2 3A01      		movw r6,r20
+ 1473 05c4 2901      		movw r4,r18
+ 218:video.c       **** 	int16_t dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+ 1474               		.loc 1 218 2 is_stmt 1 view .LVU294
+ 218:video.c       **** 	int16_t dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+ 1475               		.loc 1 218 10 is_stmt 0 view .LVU295
+ 1476 05c6 6A01      		movw r12,r20
+ 1477 05c8 C81A      		sub r12,r24
+ 1478 05ca D90A      		sbc r13,r25
+ 1479 05cc D7FE      		sbrs r13,7
+ 1480 05ce 00C0      		rjmp .L71
+ 1481 05d0 D194      		neg r13
+ 1482 05d2 C194      		neg r12
+ 1483 05d4 D108      		sbc r13,__zero_reg__
+ 1484               	.L71:
+ 1485               	.LVL103:
+ 218:video.c       **** 	int16_t dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+ 1486               		.loc 1 218 46 view .LVU296
+ 1487 05d6 E614      		cp r14,r6
+ 1488 05d8 F704      		cpc r15,r7
+ 1489 05da 04F4      		brge .+2
+ 1490 05dc 00C0      		rjmp .L83
+ 1491 05de 2FEF      		ldi r18,lo8(-1)
+ 1492 05e0 3FEF      		ldi r19,lo8(-1)
+ 1493               	.LVL104:
+ 218:video.c       **** 	int16_t dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+ 1494               		.loc 1 218 46 view .LVU297
+ 1495 05e2 3A83      		std Y+2,r19
+ 1496 05e4 2983      		std Y+1,r18
+ 1497               	.LVL105:
+ 1498               	.L72:
+ 219:video.c       **** 	int16_t err = (dx > dy ? dx : -dy) / 2, e2;
+ 1499               		.loc 1 219 2 is_stmt 1 discriminator 4 view .LVU298
+ 219:video.c       **** 	int16_t err = (dx > dy ? dx : -dy) / 2, e2;
+ 1500               		.loc 1 219 10 is_stmt 0 discriminator 4 view .LVU299
+ 1501 05e6 4201      		movw r8,r4
+ 1502 05e8 801A      		sub r8,r16
+ 1503 05ea 910A      		sbc r9,r17
+ 1504 05ec 97FE      		sbrs r9,7
+ 1505 05ee 00C0      		rjmp .L73
+ 1506 05f0 9194      		neg r9
+ 1507 05f2 8194      		neg r8
+ 1508 05f4 9108      		sbc r9,__zero_reg__
+ 1509               	.L73:
+ 1510               	.LVL106:
+ 219:video.c       **** 	int16_t err = (dx > dy ? dx : -dy) / 2, e2;
+ 1511               		.loc 1 219 46 discriminator 4 view .LVU300
+ 1512 05f6 2224      		clr r2
+ 1513 05f8 2A94      		dec r2
+ 1514 05fa 322C      		mov r3,r2
+ 1515               	.LVL107:
+ 219:video.c       **** 	int16_t err = (dx > dy ? dx : -dy) / 2, e2;
+ 1516               		.loc 1 219 46 discriminator 4 view .LVU301
+ 1517 05fc 0415      		cp r16,r4
+ 1518 05fe 1505      		cpc r17,r5
+ 1519 0600 04F4      		brge .L74
+ 219:video.c       **** 	int16_t err = (dx > dy ? dx : -dy) / 2, e2;
+ 1520               		.loc 1 219 46 view .LVU302
+ 1521 0602 2224      		clr r2
+ 1522 0604 2394      		inc r2
+ 1523 0606 312C      		mov r3,__zero_reg__
+ 1524               	.L74:
+ 1525               	.LVL108:
+ 220:video.c       **** 	while(x0 != x1 && y0 != y1)
+ 1526               		.loc 1 220 2 is_stmt 1 discriminator 4 view .LVU303
+ 220:video.c       **** 	while(x0 != x1 && y0 != y1)
+ 1527               		.loc 1 220 37 is_stmt 0 discriminator 4 view .LVU304
+ 1528 0608 8C14      		cp r8,r12
+ 1529 060a 9D04      		cpc r9,r13
+ 1530 060c 04F0      		brlt .L75
+ 220:video.c       **** 	while(x0 != x1 && y0 != y1)
+ 1531               		.loc 1 220 32 discriminator 1 view .LVU305
+ 1532 060e 2227      		clr r18
+ 1533 0610 3327      		clr r19
+ 1534 0612 2819      		sub r18,r8
+ 1535 0614 3909      		sbc r19,r9
+ 1536 0616 3C83      		std Y+4,r19
+ 1537 0618 2B83      		std Y+3,r18
+ 220:video.c       **** 	while(x0 != x1 && y0 != y1)
+ 1538               		.loc 1 220 37 discriminator 1 view .LVU306
+ 1539 061a 37FF      		sbrs r19,7
+ 1540 061c 00C0      		rjmp .L76
+ 1541 061e 2F5F      		subi r18,-1
+ 1542 0620 3F4F      		sbci r19,-1
+ 1543 0622 3C83      		std Y+4,r19
+ 1544 0624 2B83      		std Y+3,r18
+ 1545               	.L76:
+ 1546 0626 8B81      		ldd r24,Y+3
+ 1547 0628 9C81      		ldd r25,Y+4
+ 1548 062a 9595      		asr r25
+ 1549 062c 8795      		ror r24
+ 1550 062e 9C83      		std Y+4,r25
+ 1551 0630 8B83      		std Y+3,r24
+ 1552               	.L78:
+ 227:video.c       **** 		{
+ 1553               		.loc 1 227 11 view .LVU307
+ 1554 0632 AA24      		clr r10
+ 1555 0634 BB24      		clr r11
+ 1556 0636 AC18      		sub r10,r12
+ 1557 0638 BD08      		sbc r11,r13
+ 1558               	.LVL109:
+ 1559               	.L77:
+ 221:video.c       **** 	{
+ 1560               		.loc 1 221 7 is_stmt 1 view .LVU308
+ 1561 063a E614      		cp r14,r6
+ 1562 063c F704      		cpc r15,r7
+ 1563 063e 01F0      		breq .L70
+ 221:video.c       **** 	{
+ 1564               		.loc 1 221 17 is_stmt 0 discriminator 1 view .LVU309
+ 1565 0640 0415      		cp r16,r4
+ 1566 0642 1505      		cpc r17,r5
+ 1567 0644 01F4      		brne .L82
+ 1568               	.L70:
+ 1569               	/* epilogue start */
+ 239:video.c       **** 
+ 1570               		.loc 1 239 1 view .LVU310
+ 1571 0646 0F90      		pop __tmp_reg__
+ 1572 0648 0F90      		pop __tmp_reg__
+ 1573 064a 0F90      		pop __tmp_reg__
+ 1574 064c 0F90      		pop __tmp_reg__
+ 1575 064e DF91      		pop r29
+ 1576 0650 CF91      		pop r28
+ 1577               	.LVL110:
+ 239:video.c       **** 
+ 1578               		.loc 1 239 1 view .LVU311
+ 1579 0652 1F91      		pop r17
+ 1580               	.LVL111:
+ 239:video.c       **** 
+ 1581               		.loc 1 239 1 view .LVU312
+ 1582 0654 0F91      		pop r16
+ 1583               	.LVL112:
+ 239:video.c       **** 
+ 1584               		.loc 1 239 1 view .LVU313
+ 1585 0656 FF90      		pop r15
+ 1586               	.LVL113:
+ 239:video.c       **** 
+ 1587               		.loc 1 239 1 view .LVU314
+ 1588 0658 EF90      		pop r14
+ 1589               	.LVL114:
+ 239:video.c       **** 
+ 1590               		.loc 1 239 1 view .LVU315
+ 1591 065a DF90      		pop r13
+ 1592               	.LVL115:
+ 239:video.c       **** 
+ 1593               		.loc 1 239 1 view .LVU316
+ 1594 065c CF90      		pop r12
+ 1595               	.LVL116:
+ 239:video.c       **** 
+ 1596               		.loc 1 239 1 view .LVU317
+ 1597 065e BF90      		pop r11
+ 1598               	.LVL117:
+ 239:video.c       **** 
+ 1599               		.loc 1 239 1 view .LVU318
+ 1600 0660 AF90      		pop r10
+ 1601               	.LVL118:
+ 239:video.c       **** 
+ 1602               		.loc 1 239 1 view .LVU319
+ 1603 0662 9F90      		pop r9
+ 1604               	.LVL119:
+ 239:video.c       **** 
+ 1605               		.loc 1 239 1 view .LVU320
+ 1606 0664 8F90      		pop r8
+ 1607               	.LVL120:
+ 239:video.c       **** 
+ 1608               		.loc 1 239 1 view .LVU321
+ 1609 0666 7F90      		pop r7
+ 1610               	.LVL121:
+ 239:video.c       **** 
+ 1611               		.loc 1 239 1 view .LVU322
+ 1612 0668 6F90      		pop r6
+ 1613               	.LVL122:
+ 239:video.c       **** 
+ 1614               		.loc 1 239 1 view .LVU323
+ 1615 066a 5F90      		pop r5
+ 1616               	.LVL123:
+ 239:video.c       **** 
+ 1617               		.loc 1 239 1 view .LVU324
+ 1618 066c 4F90      		pop r4
+ 1619               	.LVL124:
+ 239:video.c       **** 
+ 1620               		.loc 1 239 1 view .LVU325
+ 1621 066e 3F90      		pop r3
+ 1622               	.LVL125:
+ 239:video.c       **** 
+ 1623               		.loc 1 239 1 view .LVU326
+ 1624 0670 2F90      		pop r2
+ 1625               	.LVL126:
+ 239:video.c       **** 
+ 1626               		.loc 1 239 1 view .LVU327
+ 1627 0672 0895      		ret
+ 1628               	.LVL127:
+ 1629               	.L83:
+ 218:video.c       **** 	int16_t dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+ 1630               		.loc 1 218 46 view .LVU328
+ 1631 0674 81E0      		ldi r24,lo8(1)
+ 1632 0676 90E0      		ldi r25,0
+ 1633 0678 9A83      		std Y+2,r25
+ 1634 067a 8983      		std Y+1,r24
+ 1635 067c 00C0      		rjmp .L72
+ 1636               	.LVL128:
+ 1637               	.L75:
+ 220:video.c       **** 	while(x0 != x1 && y0 != y1)
+ 1638               		.loc 1 220 37 discriminator 2 view .LVU329
+ 1639 067e 9601      		movw r18,r12
+ 1640 0680 3595      		asr r19
+ 1641 0682 2795      		ror r18
+ 1642 0684 3C83      		std Y+4,r19
+ 1643 0686 2B83      		std Y+3,r18
+ 1644 0688 00C0      		rjmp .L78
+ 1645               	.LVL129:
+ 1646               	.L82:
+ 223:video.c       **** 
+ 1647               		.loc 1 223 3 is_stmt 1 view .LVU330
+ 1648 068a 602F      		mov r22,r16
+ 1649 068c 8E2D      		mov r24,r14
+ 1650 068e 0E94 0000 		call video_set_pixel
+ 1651               	.LVL130:
+ 225:video.c       **** 
+ 1652               		.loc 1 225 3 view .LVU331
+ 227:video.c       **** 		{
+ 1653               		.loc 1 227 3 view .LVU332
+ 227:video.c       **** 		{
+ 1654               		.loc 1 227 5 is_stmt 0 view .LVU333
+ 1655 0692 8B81      		ldd r24,Y+3
+ 1656 0694 9C81      		ldd r25,Y+4
+ 1657 0696 A816      		cp r10,r24
+ 1658 0698 B906      		cpc r11,r25
+ 1659 069a 04F4      		brge .L85
+ 229:video.c       **** 			x0 += sx;
+ 1660               		.loc 1 229 4 is_stmt 1 view .LVU334
+ 229:video.c       **** 			x0 += sx;
+ 1661               		.loc 1 229 8 is_stmt 0 view .LVU335
+ 1662 069c 8819      		sub r24,r8
+ 1663 069e 9909      		sbc r25,r9
+ 1664               	.LVL131:
+ 230:video.c       **** 		}
+ 1665               		.loc 1 230 4 is_stmt 1 view .LVU336
+ 230:video.c       **** 		}
+ 1666               		.loc 1 230 7 is_stmt 0 view .LVU337
+ 1667 06a0 2981      		ldd r18,Y+1
+ 1668 06a2 3A81      		ldd r19,Y+2
+ 1669 06a4 E20E      		add r14,r18
+ 1670 06a6 F31E      		adc r15,r19
+ 1671               	.LVL132:
+ 1672               	.L79:
+ 233:video.c       **** 		{
+ 1673               		.loc 1 233 3 is_stmt 1 view .LVU338
+ 233:video.c       **** 		{
+ 1674               		.loc 1 233 5 is_stmt 0 view .LVU339
+ 1675 06a8 2B81      		ldd r18,Y+3
+ 1676 06aa 3C81      		ldd r19,Y+4
+ 1677 06ac 2815      		cp r18,r8
+ 1678 06ae 3905      		cpc r19,r9
+ 1679 06b0 04F4      		brge .L80
+ 235:video.c       **** 			y0 += sy;
+ 1680               		.loc 1 235 4 is_stmt 1 view .LVU340
+ 235:video.c       **** 			y0 += sy;
+ 1681               		.loc 1 235 8 is_stmt 0 view .LVU341
+ 1682 06b2 8C0D      		add r24,r12
+ 1683 06b4 9D1D      		adc r25,r13
+ 1684               	.LVL133:
+ 236:video.c       **** 		}
+ 1685               		.loc 1 236 4 is_stmt 1 view .LVU342
+ 236:video.c       **** 		}
+ 1686               		.loc 1 236 7 is_stmt 0 view .LVU343
+ 1687 06b6 020D      		add r16,r2
+ 1688 06b8 131D      		adc r17,r3
+ 1689               	.LVL134:
+ 1690               	.L80:
+ 236:video.c       **** 		}
+ 1691               		.loc 1 236 7 view .LVU344
+ 1692 06ba 9C83      		std Y+4,r25
+ 1693 06bc 8B83      		std Y+3,r24
+ 1694               	.LVL135:
+ 236:video.c       **** 		}
+ 1695               		.loc 1 236 7 view .LVU345
+ 1696 06be 00C0      		rjmp .L77
+ 1697               	.LVL136:
+ 1698               	.L85:
+ 236:video.c       **** 		}
+ 1699               		.loc 1 236 7 view .LVU346
+ 1700 06c0 8B81      		ldd r24,Y+3
+ 1701 06c2 9C81      		ldd r25,Y+4
+ 1702               	.LVL137:
+ 236:video.c       **** 		}
+ 1703               		.loc 1 236 7 view .LVU347
+ 1704 06c4 00C0      		rjmp .L79
+ 1705               		.cfi_endproc
+ 1706               	.LFE12:
+ 1708               	.global	video_char
+ 1710               	video_char:
+ 1711               	.LVL138:
+ 1712               	.LFB13:
+ 242:video.c       **** 	uint8_t a, b, p, ex, ey;
+ 1713               		.loc 1 242 1 is_stmt 1 view -0
+ 1714               		.cfi_startproc
+ 242:video.c       **** 	uint8_t a, b, p, ex, ey;
+ 1715               		.loc 1 242 1 is_stmt 0 view .LVU349
+ 1716 06c6 AF92      		push r10
+ 1717               	.LCFI54:
+ 1718               		.cfi_def_cfa_offset 3
+ 1719               		.cfi_offset 10, -2
+ 1720 06c8 BF92      		push r11
+ 1721               	.LCFI55:
+ 1722               		.cfi_def_cfa_offset 4
+ 1723               		.cfi_offset 11, -3
+ 1724 06ca CF92      		push r12
+ 1725               	.LCFI56:
+ 1726               		.cfi_def_cfa_offset 5
+ 1727               		.cfi_offset 12, -4
+ 1728 06cc DF92      		push r13
+ 1729               	.LCFI57:
+ 1730               		.cfi_def_cfa_offset 6
+ 1731               		.cfi_offset 13, -5
+ 1732 06ce EF92      		push r14
+ 1733               	.LCFI58:
+ 1734               		.cfi_def_cfa_offset 7
+ 1735               		.cfi_offset 14, -6
+ 1736 06d0 FF92      		push r15
+ 1737               	.LCFI59:
+ 1738               		.cfi_def_cfa_offset 8
+ 1739               		.cfi_offset 15, -7
+ 1740 06d2 0F93      		push r16
+ 1741               	.LCFI60:
+ 1742               		.cfi_def_cfa_offset 9
+ 1743               		.cfi_offset 16, -8
+ 1744 06d4 1F93      		push r17
+ 1745               	.LCFI61:
+ 1746               		.cfi_def_cfa_offset 10
+ 1747               		.cfi_offset 17, -9
+ 1748 06d6 CF93      		push r28
+ 1749               	.LCFI62:
+ 1750               		.cfi_def_cfa_offset 11
+ 1751               		.cfi_offset 28, -10
+ 1752 06d8 DF93      		push r29
+ 1753               	.LCFI63:
+ 1754               		.cfi_def_cfa_offset 12
+ 1755               		.cfi_offset 29, -11
+ 1756               	/* prologue: function */
+ 1757               	/* frame size = 0 */
+ 1758               	/* stack size = 10 */
+ 1759               	.L__stack_usage = 10
+ 1760 06da 062F      		mov r16,r22
+ 243:video.c       **** 	const uint8_t *v;
+ 1761               		.loc 1 243 2 is_stmt 1 view .LVU350
+ 244:video.c       **** 	a = y;
+ 1762               		.loc 1 244 2 view .LVU351
+ 245:video.c       **** 	ex = x + 5;
+ 1763               		.loc 1 245 2 view .LVU352
+ 1764               	.LVL139:
+ 246:video.c       **** 	ey = y + 7;
+ 1765               		.loc 1 246 2 view .LVU353
+ 247:video.c       **** 	v = font5x7 + 5 * (c - 32);
+ 1766               		.loc 1 247 2 view .LVU354
+ 248:video.c       **** 	if(ex < PWIDTH && ey < HEIGHT)
+ 1767               		.loc 1 248 2 view .LVU355
+ 249:video.c       **** 	{
+ 1768               		.loc 1 249 2 view .LVU356
+ 246:video.c       **** 	ey = y + 7;
+ 1769               		.loc 1 246 5 is_stmt 0 view .LVU357
+ 1770 06dc 95E0      		ldi r25,lo8(5)
+ 1771 06de 980F      		add r25,r24
+ 249:video.c       **** 	{
+ 1772               		.loc 1 249 4 view .LVU358
+ 1773 06e0 903A      		cpi r25,lo8(-96)
+ 1774 06e2 00F4      		brsh .L86
+ 247:video.c       **** 	v = font5x7 + 5 * (c - 32);
+ 1775               		.loc 1 247 5 discriminator 1 view .LVU359
+ 1776 06e4 97E0      		ldi r25,lo8(7)
+ 1777 06e6 960F      		add r25,r22
+ 1778               	.LVL140:
+ 249:video.c       **** 	{
+ 1779               		.loc 1 249 17 discriminator 1 view .LVU360
+ 1780 06e8 9036      		cpi r25,lo8(96)
+ 1781 06ea 00F4      		brsh .L86
+ 248:video.c       **** 	if(ex < PWIDTH && ey < HEIGHT)
+ 1782               		.loc 1 248 23 view .LVU361
+ 1783 06ec 4052      		subi r20,32
+ 1784 06ee 550B      		sbc r21,r21
+ 1785               	.LVL141:
+ 248:video.c       **** 	if(ex < PWIDTH && ey < HEIGHT)
+ 1786               		.loc 1 248 18 view .LVU362
+ 1787 06f0 95E0      		ldi r25,lo8(5)
+ 1788               	.LVL142:
+ 248:video.c       **** 	if(ex < PWIDTH && ey < HEIGHT)
+ 1789               		.loc 1 248 18 view .LVU363
+ 1790 06f2 949F      		mul r25,r20
+ 1791 06f4 9001      		movw r18,r0
+ 1792 06f6 959F      		mul r25,r21
+ 1793 06f8 300D      		add r19,r0
+ 1794 06fa 1124      		clr __zero_reg__
+ 248:video.c       **** 	if(ex < PWIDTH && ey < HEIGHT)
+ 1795               		.loc 1 248 4 view .LVU364
+ 1796 06fc A901      		movw r20,r18
+ 1797 06fe 4050      		subi r20,lo8(-(font5x7))
+ 1798 0700 5040      		sbci r21,hi8(-(font5x7))
+ 1799 0702 7A01      		movw r14,r20
+ 1800 0704 C1E0      		ldi r28,lo8(1)
+ 1801 0706 8B3F      		cpi r24,lo8(-5)
+ 1802 0708 00F4      		brsh .L90
+ 1803 070a C6E0      		ldi r28,lo8(6)
+ 1804               	.L90:
+ 1805 070c 182F      		mov r17,r24
+ 1806 070e 1C0F      		add r17,r28
+ 1807               	.LVL143:
+ 1808               	.L91:
+ 248:video.c       **** 	if(ex < PWIDTH && ey < HEIGHT)
+ 1809               		.loc 1 248 4 view .LVU365
+ 1810 0710 C12E      		mov r12,r17
+ 1811 0712 CC1A      		sub r12,r28
+ 1812               	.LVL144:
+ 251:video.c       **** 		{
+ 1813               		.loc 1 251 9 is_stmt 1 discriminator 1 view .LVU366
+ 1814 0714 C150      		subi r28,lo8(-(-1))
+ 251:video.c       **** 		{
+ 1815               		.loc 1 251 3 is_stmt 0 discriminator 1 view .LVU367
+ 1816 0716 01F4      		brne .L97
+ 1817               	.LVL145:
+ 1818               	.L86:
+ 1819               	/* epilogue start */
+ 263:video.c       **** 
+ 1820               		.loc 1 263 1 view .LVU368
+ 1821 0718 DF91      		pop r29
+ 1822 071a CF91      		pop r28
+ 1823 071c 1F91      		pop r17
+ 1824 071e 0F91      		pop r16
+ 1825               	.LVL146:
+ 263:video.c       **** 
+ 1826               		.loc 1 263 1 view .LVU369
+ 1827 0720 FF90      		pop r15
+ 1828 0722 EF90      		pop r14
+ 1829 0724 DF90      		pop r13
+ 1830 0726 CF90      		pop r12
+ 1831 0728 BF90      		pop r11
+ 1832 072a AF90      		pop r10
+ 1833 072c 0895      		ret
+ 1834               	.LVL147:
+ 1835               	.L97:
+ 253:video.c       **** 			for(y = a, b = 1; y < ey; ++y, b <<= 1)
+ 1836               		.loc 1 253 4 is_stmt 1 view .LVU370
+ 1837               	.LBB10:
+ 253:video.c       **** 			for(y = a, b = 1; y < ey; ++y, b <<= 1)
+ 1838               		.loc 1 253 8 view .LVU371
+ 253:video.c       **** 			for(y = a, b = 1; y < ey; ++y, b <<= 1)
+ 1839               		.loc 1 253 8 view .LVU372
+ 253:video.c       **** 			for(y = a, b = 1; y < ey; ++y, b <<= 1)
+ 1840               		.loc 1 253 8 view .LVU373
+ 1841 072e F701      		movw r30,r14
+ 1842               	/* #APP */
+ 1843               	 ;  253 "video.c" 1
+ 1844 0730 A490      		lpm r10, Z
+ 1845               		
+ 1846               	 ;  0 "" 2
+ 1847               	.LVL148:
+ 253:video.c       **** 			for(y = a, b = 1; y < ey; ++y, b <<= 1)
+ 1848               		.loc 1 253 8 view .LVU374
+ 253:video.c       **** 			for(y = a, b = 1; y < ey; ++y, b <<= 1)
+ 1849               		.loc 1 253 8 is_stmt 0 view .LVU375
+ 1850               	/* #NOAPP */
+ 1851               	.LBE10:
+ 254:video.c       **** 			{
+ 1852               		.loc 1 254 4 is_stmt 1 view .LVU376
+ 254:video.c       **** 			{
+ 1853               		.loc 1 254 4 is_stmt 0 view .LVU377
+ 1854 0732 D1E0      		ldi r29,lo8(1)
+ 1855 0734 093F      		cpi r16,lo8(-7)
+ 1856 0736 00F4      		brsh .L93
+ 254:video.c       **** 			{
+ 1857               		.loc 1 254 4 view .LVU378
+ 1858 0738 D8E0      		ldi r29,lo8(8)
+ 1859               	.L93:
+ 254:video.c       **** 			{
+ 1860               		.loc 1 254 17 view .LVU379
+ 1861 073a DD24      		clr r13
+ 1862 073c D394      		inc r13
+ 1863 073e B02E      		mov r11,r16
+ 1864 0740 BD0E      		add r11,r29
+ 1865               	.LVL149:
+ 1866               	.L94:
+ 254:video.c       **** 			{
+ 1867               		.loc 1 254 17 view .LVU380
+ 1868 0742 6B2D      		mov r22,r11
+ 1869 0744 6D1B      		sub r22,r29
+ 1870               	.LVL150:
+ 254:video.c       **** 			{
+ 1871               		.loc 1 254 22 is_stmt 1 discriminator 1 view .LVU381
+ 1872 0746 D150      		subi r29,lo8(-(-1))
+ 254:video.c       **** 			{
+ 1873               		.loc 1 254 4 is_stmt 0 discriminator 1 view .LVU382
+ 1874 0748 01F4      		brne .L96
+ 251:video.c       **** 		{
+ 1875               		.loc 1 251 17 is_stmt 1 view .LVU383
+ 1876               	.LVL151:
+ 251:video.c       **** 		{
+ 1877               		.loc 1 251 22 is_stmt 0 view .LVU384
+ 1878 074a FFEF      		ldi r31,-1
+ 1879 074c EF1A      		sub r14,r31
+ 1880 074e FF0A      		sbc r15,r31
+ 1881               	.LVL152:
+ 251:video.c       **** 		{
+ 1882               		.loc 1 251 22 view .LVU385
+ 1883 0750 00C0      		rjmp .L91
+ 1884               	.LVL153:
+ 1885               	.L96:
+ 256:video.c       **** 				{
+ 1886               		.loc 1 256 5 is_stmt 1 view .LVU386
+ 256:video.c       **** 				{
+ 1887               		.loc 1 256 8 is_stmt 0 view .LVU387
+ 1888 0752 8D2D      		mov r24,r13
+ 1889 0754 8A21      		and r24,r10
+ 256:video.c       **** 				{
+ 1890               		.loc 1 256 7 view .LVU388
+ 1891 0756 01F0      		breq .L95
+ 258:video.c       **** 				}
+ 1892               		.loc 1 258 6 is_stmt 1 view .LVU389
+ 1893 0758 8C2D      		mov r24,r12
+ 1894 075a 0E94 0000 		call video_sp
+ 1895               	.LVL154:
+ 1896               	.L95:
+ 254:video.c       **** 			{
+ 1897               		.loc 1 254 30 discriminator 2 view .LVU390
+ 254:video.c       **** 			{
+ 1898               		.loc 1 254 37 is_stmt 0 discriminator 2 view .LVU391
+ 1899 075e DD0C      		lsl r13
+ 1900               	.LVL155:
+ 254:video.c       **** 			{
+ 1901               		.loc 1 254 37 discriminator 2 view .LVU392
+ 1902 0760 00C0      		rjmp .L94
+ 1903               		.cfi_endproc
+ 1904               	.LFE13:
+ 1906               	.global	video_string
+ 1908               	video_string:
+ 1909               	.LVL156:
+ 1910               	.LFB14:
+ 266:video.c       **** 	while(*s)
+ 1911               		.loc 1 266 1 is_stmt 1 view -0
+ 1912               		.cfi_startproc
+ 266:video.c       **** 	while(*s)
+ 1913               		.loc 1 266 1 is_stmt 0 view .LVU394
+ 1914 0762 0F93      		push r16
+ 1915               	.LCFI64:
+ 1916               		.cfi_def_cfa_offset 3
+ 1917               		.cfi_offset 16, -2
+ 1918 0764 1F93      		push r17
+ 1919               	.LCFI65:
+ 1920               		.cfi_def_cfa_offset 4
+ 1921               		.cfi_offset 17, -3
+ 1922 0766 CF93      		push r28
+ 1923               	.LCFI66:
+ 1924               		.cfi_def_cfa_offset 5
+ 1925               		.cfi_offset 28, -4
+ 1926 0768 DF93      		push r29
+ 1927               	.LCFI67:
+ 1928               		.cfi_def_cfa_offset 6
+ 1929               		.cfi_offset 29, -5
+ 1930               	/* prologue: function */
+ 1931               	/* frame size = 0 */
+ 1932               	/* stack size = 4 */
+ 1933               	.L__stack_usage = 4
+ 1934 076a C82F      		mov r28,r24
+ 1935 076c D62F      		mov r29,r22
+ 1936 076e 8A01      		movw r16,r20
+ 267:video.c       **** 	{
+ 1937               		.loc 1 267 2 is_stmt 1 view .LVU395
+ 1938               	.LVL157:
+ 1939               	.L102:
+ 267:video.c       **** 	{
+ 1940               		.loc 1 267 7 view .LVU396
+ 267:video.c       **** 	{
+ 1941               		.loc 1 267 8 is_stmt 0 view .LVU397
+ 1942 0770 F801      		movw r30,r16
+ 1943 0772 4191      		ld r20,Z+
+ 1944 0774 8F01      		movw r16,r30
+ 1945               	.LVL158:
+ 267:video.c       **** 	{
+ 1946               		.loc 1 267 7 view .LVU398
+ 1947 0776 4111      		cpse r20,__zero_reg__
+ 1948 0778 00C0      		rjmp .L103
+ 1949               	/* epilogue start */
+ 272:video.c       **** 
+ 1950               		.loc 1 272 1 view .LVU399
+ 1951 077a DF91      		pop r29
+ 1952               	.LVL159:
+ 272:video.c       **** 
+ 1953               		.loc 1 272 1 view .LVU400
+ 1954 077c CF91      		pop r28
+ 1955               	.LVL160:
+ 272:video.c       **** 
+ 1956               		.loc 1 272 1 view .LVU401
+ 1957 077e 1F91      		pop r17
+ 1958 0780 0F91      		pop r16
+ 1959               	.LVL161:
+ 272:video.c       **** 
+ 1960               		.loc 1 272 1 view .LVU402
+ 1961 0782 0895      		ret
+ 1962               	.LVL162:
+ 1963               	.L103:
+ 269:video.c       **** 		x += 6;
+ 1964               		.loc 1 269 3 is_stmt 1 view .LVU403
+ 269:video.c       **** 		x += 6;
+ 1965               		.loc 1 269 3 is_stmt 0 view .LVU404
+ 1966 0784 6D2F      		mov r22,r29
+ 1967 0786 8C2F      		mov r24,r28
+ 1968 0788 0E94 0000 		call video_char
+ 1969               	.LVL163:
+ 270:video.c       **** 	}
+ 1970               		.loc 1 270 3 is_stmt 1 view .LVU405
+ 270:video.c       **** 	}
+ 1971               		.loc 1 270 5 is_stmt 0 view .LVU406
+ 1972 078c CA5F      		subi r28,lo8(-(6))
+ 1973               	.LVL164:
+ 270:video.c       **** 	}
+ 1974               		.loc 1 270 5 view .LVU407
+ 1975 078e 00C0      		rjmp .L102
+ 1976               		.cfi_endproc
+ 1977               	.LFE14:
+ 1979               	.global	video_bitmap
+ 1981               	video_bitmap:
+ 1982               	.LVL165:
+ 1983               	.LFB15:
+ 276:video.c       **** 	uint8_t *end, mask, sx = x0;
+ 1984               		.loc 1 276 1 is_stmt 1 view -0
+ 1985               		.cfi_startproc
+ 276:video.c       **** 	uint8_t *end, mask, sx = x0;
+ 1986               		.loc 1 276 1 is_stmt 0 view .LVU409
+ 1987 0790 8F92      		push r8
+ 1988               	.LCFI68:
+ 1989               		.cfi_def_cfa_offset 3
+ 1990               		.cfi_offset 8, -2
+ 1991 0792 9F92      		push r9
+ 1992               	.LCFI69:
+ 1993               		.cfi_def_cfa_offset 4
+ 1994               		.cfi_offset 9, -3
+ 1995 0794 BF92      		push r11
+ 1996               	.LCFI70:
+ 1997               		.cfi_def_cfa_offset 5
+ 1998               		.cfi_offset 11, -4
+ 1999 0796 CF92      		push r12
+ 2000               	.LCFI71:
+ 2001               		.cfi_def_cfa_offset 6
+ 2002               		.cfi_offset 12, -5
+ 2003 0798 DF92      		push r13
+ 2004               	.LCFI72:
+ 2005               		.cfi_def_cfa_offset 7
+ 2006               		.cfi_offset 13, -6
+ 2007 079a EF92      		push r14
+ 2008               	.LCFI73:
+ 2009               		.cfi_def_cfa_offset 8
+ 2010               		.cfi_offset 14, -7
+ 2011 079c FF92      		push r15
+ 2012               	.LCFI74:
+ 2013               		.cfi_def_cfa_offset 9
+ 2014               		.cfi_offset 15, -8
+ 2015 079e 0F93      		push r16
+ 2016               	.LCFI75:
+ 2017               		.cfi_def_cfa_offset 10
+ 2018               		.cfi_offset 16, -9
+ 2019 07a0 1F93      		push r17
+ 2020               	.LCFI76:
+ 2021               		.cfi_def_cfa_offset 11
+ 2022               		.cfi_offset 17, -10
+ 2023 07a2 CF93      		push r28
+ 2024               	.LCFI77:
+ 2025               		.cfi_def_cfa_offset 12
+ 2026               		.cfi_offset 28, -11
+ 2027 07a4 DF93      		push r29
+ 2028               	.LCFI78:
+ 2029               		.cfi_def_cfa_offset 13
+ 2030               		.cfi_offset 29, -12
+ 2031               	/* prologue: function */
+ 2032               	/* frame size = 0 */
+ 2033               	/* stack size = 11 */
+ 2034               	.L__stack_usage = 11
+ 2035 07a6 EC01      		movw r28,r24
+ 2036 07a8 E62E      		mov r14,r22
+ 2037 07aa F42E      		mov r15,r20
+ 2038 07ac B22E      		mov r11,r18
+ 277:video.c       **** 	for(end = img + len; img < end; ++img)
+ 2039               		.loc 1 277 2 is_stmt 1 view .LVU410
+ 2040               	.LVL166:
+ 278:video.c       **** 	{
+ 2041               		.loc 1 278 2 view .LVU411
+ 278:video.c       **** 	{
+ 2042               		.loc 1 278 10 is_stmt 0 view .LVU412
+ 2043 07ae 6C01      		movw r12,r24
+ 2044 07b0 C00E      		add r12,r16
+ 2045 07b2 D11E      		adc r13,r17
+ 2046               	.LVL167:
+ 278:video.c       **** 	{
+ 2047               		.loc 1 278 2 view .LVU413
+ 2048 07b4 162F      		mov r17,r22
+ 2049               	.LVL168:
+ 2050               	.L105:
+ 278:video.c       **** 	{
+ 2051               		.loc 1 278 23 is_stmt 1 discriminator 1 view .LVU414
+ 278:video.c       **** 	{
+ 2052               		.loc 1 278 2 is_stmt 0 discriminator 1 view .LVU415
+ 2053 07b6 CC15      		cp r28,r12
+ 2054 07b8 DD05      		cpc r29,r13
+ 2055 07ba 00F0      		brlo .L109
+ 2056               	/* epilogue start */
+ 294:video.c       **** 
+ 2057               		.loc 1 294 1 view .LVU416
+ 2058 07bc DF91      		pop r29
+ 2059 07be CF91      		pop r28
+ 2060               	.LVL169:
+ 294:video.c       **** 
+ 2061               		.loc 1 294 1 view .LVU417
+ 2062 07c0 1F91      		pop r17
+ 2063               	.LVL170:
+ 294:video.c       **** 
+ 2064               		.loc 1 294 1 view .LVU418
+ 2065 07c2 0F91      		pop r16
+ 2066 07c4 FF90      		pop r15
+ 2067               	.LVL171:
+ 294:video.c       **** 
+ 2068               		.loc 1 294 1 view .LVU419
+ 2069 07c6 EF90      		pop r14
+ 2070               	.LVL172:
+ 294:video.c       **** 
+ 2071               		.loc 1 294 1 view .LVU420
+ 2072 07c8 DF90      		pop r13
+ 2073 07ca CF90      		pop r12
+ 2074               	.LVL173:
+ 294:video.c       **** 
+ 2075               		.loc 1 294 1 view .LVU421
+ 2076 07cc BF90      		pop r11
+ 2077               	.LVL174:
+ 294:video.c       **** 
+ 2078               		.loc 1 294 1 view .LVU422
+ 2079 07ce 9F90      		pop r9
+ 2080 07d0 8F90      		pop r8
+ 2081 07d2 0895      		ret
+ 2082               	.LVL175:
+ 2083               	.L109:
+ 294:video.c       **** 
+ 2084               		.loc 1 294 1 view .LVU423
+ 2085 07d4 87E0      		ldi r24,lo8(7)
+ 2086 07d6 882E      		mov r8,r24
+ 2087 07d8 912C      		mov r9,__zero_reg__
+ 280:video.c       **** 		{
+ 2088               		.loc 1 280 12 view .LVU424
+ 2089 07da 01E0      		ldi r16,lo8(1)
+ 2090               	.L108:
+ 2091               	.LVL176:
+ 282:video.c       **** 			{
+ 2092               		.loc 1 282 4 is_stmt 1 view .LVU425
+ 282:video.c       **** 			{
+ 2093               		.loc 1 282 7 is_stmt 0 view .LVU426
+ 2094 07dc 8881      		ld r24,Y
+ 2095 07de 8023      		and r24,r16
+ 282:video.c       **** 			{
+ 2096               		.loc 1 282 6 view .LVU427
+ 2097 07e0 01F0      		breq .L106
+ 284:video.c       **** 			}
+ 2098               		.loc 1 284 5 is_stmt 1 view .LVU428
+ 2099 07e2 6F2D      		mov r22,r15
+ 2100 07e4 812F      		mov r24,r17
+ 2101 07e6 0E94 0000 		call video_sp
+ 2102               	.LVL177:
+ 2103               	.L106:
+ 287:video.c       **** 			{
+ 2104               		.loc 1 287 4 view .LVU429
+ 287:video.c       **** 			{
+ 2105               		.loc 1 287 6 is_stmt 0 view .LVU430
+ 2106 07ea 1F5F      		subi r17,lo8(-(1))
+ 2107               	.LVL178:
+ 287:video.c       **** 			{
+ 2108               		.loc 1 287 6 view .LVU431
+ 2109 07ec 1B11      		cpse r17,r11
+ 2110 07ee 00C0      		rjmp .L107
+ 289:video.c       **** 				++y0;
+ 2111               		.loc 1 289 5 is_stmt 1 view .LVU432
+ 2112               	.LVL179:
+ 290:video.c       **** 			}
+ 2113               		.loc 1 290 5 view .LVU433
+ 2114 07f0 F394      		inc r15
+ 2115               	.LVL180:
+ 289:video.c       **** 				++y0;
+ 2116               		.loc 1 289 8 is_stmt 0 view .LVU434
+ 2117 07f2 1E2D      		mov r17,r14
+ 2118               	.LVL181:
+ 2119               	.L107:
+ 280:video.c       **** 		{
+ 2120               		.loc 1 280 30 is_stmt 1 discriminator 2 view .LVU435
+ 280:video.c       **** 		{
+ 2121               		.loc 1 280 35 is_stmt 0 discriminator 2 view .LVU436
+ 2122 07f4 000F      		lsl r16
+ 2123               	.LVL182:
+ 280:video.c       **** 		{
+ 2124               		.loc 1 280 17 is_stmt 1 discriminator 2 view .LVU437
+ 2125 07f6 81E0      		ldi r24,1
+ 2126 07f8 881A      		sub r8,r24
+ 2127 07fa 9108      		sbc r9,__zero_reg__
+ 280:video.c       **** 		{
+ 2128               		.loc 1 280 3 is_stmt 0 discriminator 2 view .LVU438
+ 2129 07fc 01F4      		brne .L108
+ 278:video.c       **** 	{
+ 2130               		.loc 1 278 34 is_stmt 1 discriminator 2 view .LVU439
+ 2131 07fe 2196      		adiw r28,1
+ 2132               	.LVL183:
+ 278:video.c       **** 	{
+ 2133               		.loc 1 278 34 is_stmt 0 discriminator 2 view .LVU440
+ 2134 0800 00C0      		rjmp .L105
+ 2135               		.cfi_endproc
+ 2136               	.LFE15:
+ 2138               	.global	video_shift
+ 2140               	video_shift:
+ 2141               	.LVL184:
+ 2142               	.LFB16:
+ 297:video.c       **** 	switch(dir)
+ 2143               		.loc 1 297 1 is_stmt 1 view -0
+ 2144               		.cfi_startproc
+ 297:video.c       **** 	switch(dir)
+ 2145               		.loc 1 297 1 is_stmt 0 view .LVU442
+ 2146 0802 2F92      		push r2
+ 2147               	.LCFI79:
+ 2148               		.cfi_def_cfa_offset 3
+ 2149               		.cfi_offset 2, -2
+ 2150 0804 3F92      		push r3
+ 2151               	.LCFI80:
+ 2152               		.cfi_def_cfa_offset 4
+ 2153               		.cfi_offset 3, -3
+ 2154 0806 5F92      		push r5
+ 2155               	.LCFI81:
+ 2156               		.cfi_def_cfa_offset 5
+ 2157               		.cfi_offset 5, -4
+ 2158 0808 6F92      		push r6
+ 2159               	.LCFI82:
+ 2160               		.cfi_def_cfa_offset 6
+ 2161               		.cfi_offset 6, -5
+ 2162 080a 7F92      		push r7
+ 2163               	.LCFI83:
+ 2164               		.cfi_def_cfa_offset 7
+ 2165               		.cfi_offset 7, -6
+ 2166 080c 8F92      		push r8
+ 2167               	.LCFI84:
+ 2168               		.cfi_def_cfa_offset 8
+ 2169               		.cfi_offset 8, -7
+ 2170 080e 9F92      		push r9
+ 2171               	.LCFI85:
+ 2172               		.cfi_def_cfa_offset 9
+ 2173               		.cfi_offset 9, -8
+ 2174 0810 AF92      		push r10
+ 2175               	.LCFI86:
+ 2176               		.cfi_def_cfa_offset 10
+ 2177               		.cfi_offset 10, -9
+ 2178 0812 BF92      		push r11
+ 2179               	.LCFI87:
+ 2180               		.cfi_def_cfa_offset 11
+ 2181               		.cfi_offset 11, -10
+ 2182 0814 CF92      		push r12
+ 2183               	.LCFI88:
+ 2184               		.cfi_def_cfa_offset 12
+ 2185               		.cfi_offset 12, -11
+ 2186 0816 DF92      		push r13
+ 2187               	.LCFI89:
+ 2188               		.cfi_def_cfa_offset 13
+ 2189               		.cfi_offset 13, -12
+ 2190 0818 EF92      		push r14
+ 2191               	.LCFI90:
+ 2192               		.cfi_def_cfa_offset 14
+ 2193               		.cfi_offset 14, -13
+ 2194 081a FF92      		push r15
+ 2195               	.LCFI91:
+ 2196               		.cfi_def_cfa_offset 15
+ 2197               		.cfi_offset 15, -14
+ 2198 081c 0F93      		push r16
+ 2199               	.LCFI92:
+ 2200               		.cfi_def_cfa_offset 16
+ 2201               		.cfi_offset 16, -15
+ 2202 081e 1F93      		push r17
+ 2203               	.LCFI93:
+ 2204               		.cfi_def_cfa_offset 17
+ 2205               		.cfi_offset 17, -16
+ 2206 0820 CF93      		push r28
+ 2207               	.LCFI94:
+ 2208               		.cfi_def_cfa_offset 18
+ 2209               		.cfi_offset 28, -17
+ 2210 0822 DF93      		push r29
+ 2211               	.LCFI95:
+ 2212               		.cfi_def_cfa_offset 19
+ 2213               		.cfi_offset 29, -18
+ 2214               	/* prologue: function */
+ 2215               	/* frame size = 0 */
+ 2216               	/* stack size = 17 */
+ 2217               	.L__stack_usage = 17
+ 298:video.c       **** 	{
+ 2218               		.loc 1 298 2 is_stmt 1 view .LVU443
+ 2219 0824 6230      		cpi r22,lo8(2)
+ 2220 0826 01F0      		breq .L115
+ 2221 0828 00F4      		brsh .L116
+ 2222 082a 24E1      		ldi r18,lo8(20)
+ 2223 082c 829F      		mul r24,r18
+ 2224 082e F001      		movw r30,r0
+ 2225 0830 1124      		clr __zero_reg__
+ 2226 0832 6111      		cpse r22,__zero_reg__
+ 2227 0834 00C0      		rjmp .L138
+ 2228               	.LBB11:
+ 302:video.c       **** 			dst = frame;
+ 2229               		.loc 1 302 4 view .LVU444
+ 303:video.c       **** 			src = frame + distance * WIDTH;
+ 2230               		.loc 1 303 4 view .LVU445
+ 2231               	.LVL185:
+ 304:video.c       **** 			end = frame + HEIGHT * WIDTH;
+ 2232               		.loc 1 304 4 view .LVU446
+ 305:video.c       **** 			while(src <= end)
+ 2233               		.loc 1 305 4 view .LVU447
+ 306:video.c       **** 			{
+ 2234               		.loc 1 306 4 view .LVU448
+ 304:video.c       **** 			end = frame + HEIGHT * WIDTH;
+ 2235               		.loc 1 304 8 is_stmt 0 view .LVU449
+ 2236 0836 E050      		subi r30,lo8(-(frame))
+ 2237 0838 F040      		sbci r31,hi8(-(frame))
+ 303:video.c       **** 			src = frame + distance * WIDTH;
+ 2238               		.loc 1 303 8 view .LVU450
+ 2239 083a A0E0      		ldi r26,lo8(frame)
+ 2240 083c B0E0      		ldi r27,hi8(frame)
+ 2241               	.LVL186:
+ 2242               	.L121:
+ 306:video.c       **** 			{
+ 2243               		.loc 1 306 9 is_stmt 1 view .LVU451
+ 2244 083e 30E0      		ldi r19,hi8(frame+1920)
+ 2245 0840 E030      		cpi r30,lo8(frame+1920)
+ 2246 0842 F307      		cpc r31,r19
+ 2247 0844 01F0      		breq .+2
+ 2248 0846 00F4      		brsh .L114
+ 308:video.c       **** 				*src = 0;
+ 2249               		.loc 1 308 5 view .LVU452
+ 308:video.c       **** 				*src = 0;
+ 2250               		.loc 1 308 12 is_stmt 0 view .LVU453
+ 2251 0848 8191      		ld r24,Z+
+ 2252               	.LVL187:
+ 308:video.c       **** 				*src = 0;
+ 2253               		.loc 1 308 10 view .LVU454
+ 2254 084a 8D93      		st X+,r24
+ 2255               	.LVL188:
+ 309:video.c       **** 				++dst;
+ 2256               		.loc 1 309 5 is_stmt 1 view .LVU455
+ 309:video.c       **** 				++dst;
+ 2257               		.loc 1 309 10 is_stmt 0 view .LVU456
+ 2258 084c EF01      		movw r28,r30
+ 2259 084e 2197      		sbiw r28,1
+ 2260 0850 1882      		st Y,__zero_reg__
+ 310:video.c       **** 				++src;
+ 2261               		.loc 1 310 5 is_stmt 1 view .LVU457
+ 2262               	.LVL189:
+ 311:video.c       **** 			}
+ 2263               		.loc 1 311 5 view .LVU458
+ 311:video.c       **** 			}
+ 2264               		.loc 1 311 5 is_stmt 0 view .LVU459
+ 2265 0852 00C0      		rjmp .L121
+ 2266               	.LVL190:
+ 2267               	.L116:
+ 311:video.c       **** 			}
+ 2268               		.loc 1 311 5 view .LVU460
+ 2269               	.LBE11:
+ 298:video.c       **** 	{
+ 2270               		.loc 1 298 2 view .LVU461
+ 2271 0854 6330      		cpi r22,lo8(3)
+ 2272 0856 01F4      		brne .+2
+ 2273 0858 00C0      		rjmp .L119
+ 2274               	.LVL191:
+ 2275               	.L114:
+ 2276               	/* epilogue start */
+ 388:video.c       **** 
+ 2277               		.loc 1 388 1 view .LVU462
+ 2278 085a DF91      		pop r29
+ 2279 085c CF91      		pop r28
+ 2280 085e 1F91      		pop r17
+ 2281 0860 0F91      		pop r16
+ 2282 0862 FF90      		pop r15
+ 2283 0864 EF90      		pop r14
+ 2284 0866 DF90      		pop r13
+ 2285 0868 CF90      		pop r12
+ 2286 086a BF90      		pop r11
+ 2287 086c AF90      		pop r10
+ 2288 086e 9F90      		pop r9
+ 2289 0870 8F90      		pop r8
+ 2290 0872 7F90      		pop r7
+ 2291 0874 6F90      		pop r6
+ 2292 0876 5F90      		pop r5
+ 2293 0878 3F90      		pop r3
+ 2294 087a 2F90      		pop r2
+ 2295 087c 0895      		ret
+ 2296               	.LVL192:
+ 2297               	.L138:
+ 2298               	.LBB12:
+ 318:video.c       **** 			dst = frame + HEIGHT * WIDTH;
+ 2299               		.loc 1 318 4 is_stmt 1 view .LVU463
+ 319:video.c       **** 			src = dst - distance * WIDTH;
+ 2300               		.loc 1 319 4 view .LVU464
+ 320:video.c       **** 			end = frame;
+ 2301               		.loc 1 320 4 view .LVU465
+ 320:video.c       **** 			end = frame;
+ 2302               		.loc 1 320 8 is_stmt 0 view .LVU466
+ 2303 087e 80E0      		ldi r24,lo8(frame+1920)
+ 2304 0880 90E0      		ldi r25,hi8(frame+1920)
+ 2305               	.LVL193:
+ 320:video.c       **** 			end = frame;
+ 2306               		.loc 1 320 8 view .LVU467
+ 2307 0882 DC01      		movw r26,r24
+ 2308 0884 AE1B      		sub r26,r30
+ 2309 0886 BF0B      		sbc r27,r31
+ 2310 0888 FD01      		movw r30,r26
+ 2311               	.LVL194:
+ 321:video.c       **** 			while(src >= end)
+ 2312               		.loc 1 321 4 is_stmt 1 view .LVU468
+ 322:video.c       **** 			{
+ 2313               		.loc 1 322 4 view .LVU469
+ 319:video.c       **** 			src = dst - distance * WIDTH;
+ 2314               		.loc 1 319 8 is_stmt 0 view .LVU470
+ 2315 088a DC01      		movw r26,r24
+ 2316               	.LVL195:
+ 2317               	.L123:
+ 322:video.c       **** 			{
+ 2318               		.loc 1 322 9 is_stmt 1 view .LVU471
+ 2319 088c C0E0      		ldi r28,hi8(frame)
+ 2320 088e E030      		cpi r30,lo8(frame)
+ 2321 0890 FC07      		cpc r31,r28
+ 2322 0892 00F0      		brlo .L114
+ 324:video.c       **** 				*src = 0;
+ 2323               		.loc 1 324 5 view .LVU472
+ 324:video.c       **** 				*src = 0;
+ 2324               		.loc 1 324 12 is_stmt 0 view .LVU473
+ 2325 0894 8081      		ld r24,Z
+ 324:video.c       **** 				*src = 0;
+ 2326               		.loc 1 324 10 view .LVU474
+ 2327 0896 8C93      		st X,r24
+ 325:video.c       **** 				--dst;
+ 2328               		.loc 1 325 5 is_stmt 1 view .LVU475
+ 325:video.c       **** 				--dst;
+ 2329               		.loc 1 325 10 is_stmt 0 view .LVU476
+ 2330 0898 1082      		st Z,__zero_reg__
+ 326:video.c       **** 				--src;
+ 2331               		.loc 1 326 5 is_stmt 1 view .LVU477
+ 2332 089a 1197      		sbiw r26,1
+ 2333               	.LVL196:
+ 327:video.c       **** 			}
+ 2334               		.loc 1 327 5 view .LVU478
+ 2335 089c 3197      		sbiw r30,1
+ 2336               	.LVL197:
+ 327:video.c       **** 			}
+ 2337               		.loc 1 327 5 is_stmt 0 view .LVU479
+ 2338 089e 00C0      		rjmp .L123
+ 2339               	.LVL198:
+ 2340               	.L115:
+ 327:video.c       **** 			}
+ 2341               		.loc 1 327 5 view .LVU480
+ 2342               	.LBE12:
+ 2343               	.LBB13:
+ 334:video.c       **** 			shift = distance & 7;
+ 2344               		.loc 1 334 4 is_stmt 1 view .LVU481
+ 335:video.c       **** 			for(line = 0; line < HEIGHT; ++line)
+ 2345               		.loc 1 335 4 view .LVU482
+ 335:video.c       **** 			for(line = 0; line < HEIGHT; ++line)
+ 2346               		.loc 1 335 10 is_stmt 0 view .LVU483
+ 2347 08a0 182F      		mov r17,r24
+ 2348 08a2 1770      		andi r17,lo8(7)
+ 2349               	.LVL199:
+ 336:video.c       **** 			{
+ 2350               		.loc 1 336 4 is_stmt 1 view .LVU484
+ 336:video.c       **** 			{
+ 2351               		.loc 1 336 18 view .LVU485
+ 2352 08a4 40E0      		ldi r20,lo8(frame)
+ 2353 08a6 50E0      		ldi r21,hi8(frame)
+ 339:video.c       **** 				end = dst + WIDTH - 2;
+ 2354               		.loc 1 339 26 is_stmt 0 view .LVU486
+ 2355 08a8 8695      		lsr r24
+ 2356 08aa 8695      		lsr r24
+ 2357 08ac 8695      		lsr r24
+ 2358               	.LVL200:
+ 339:video.c       **** 				end = dst + WIDTH - 2;
+ 2359               		.loc 1 339 26 view .LVU487
+ 2360 08ae 90E0      		ldi r25,0
+ 2361 08b0 8050      		subi r24,lo8(-(frame))
+ 2362 08b2 9040      		sbci r25,hi8(-(frame))
+ 2363 08b4 60E0      		ldi r22,lo8(frame+18)
+ 2364 08b6 70E0      		ldi r23,hi8(frame+18)
+ 2365               	.LVL201:
+ 347:video.c       **** 					*dst = tmp;
+ 2366               		.loc 1 347 24 view .LVU488
+ 2367 08b8 E8E0      		ldi r30,lo8(8)
+ 2368 08ba F0E0      		ldi r31,0
+ 2369 08bc E11B      		sub r30,r17
+ 2370 08be F109      		sbc r31,__zero_reg__
+ 2371               	.LVL202:
+ 2372               	.L130:
+ 338:video.c       **** 				src = dst + distance / 8;
+ 2373               		.loc 1 338 5 is_stmt 1 view .LVU489
+ 339:video.c       **** 				end = dst + WIDTH - 2;
+ 2374               		.loc 1 339 5 view .LVU490
+ 340:video.c       **** 				while(src <= end)
+ 2375               		.loc 1 340 5 view .LVU491
+ 341:video.c       **** 				{
+ 2376               		.loc 1 341 5 view .LVU492
+ 338:video.c       **** 				src = dst + distance / 8;
+ 2377               		.loc 1 338 9 is_stmt 0 view .LVU493
+ 2378 08c0 7A01      		movw r14,r20
+ 339:video.c       **** 				end = dst + WIDTH - 2;
+ 2379               		.loc 1 339 9 view .LVU494
+ 2380 08c2 EC01      		movw r28,r24
+ 2381               	.LVL203:
+ 2382               	.L126:
+ 341:video.c       **** 				{
+ 2383               		.loc 1 341 10 is_stmt 1 view .LVU495
+ 2384 08c4 2881      		ld r18,Y
+ 2385 08c6 A22F      		mov r26,r18
+ 2386 08c8 012E      		mov r0,r17
+ 2387 08ca 00C0      		rjmp 2f
+ 2388               		1:
+ 2389 08cc AA0F      		lsl r26
+ 2390               		2:
+ 2391 08ce 0A94      		dec r0
+ 2392 08d0 02F4      		brpl 1b
+ 2393 08d2 6C17      		cp r22,r28
+ 2394 08d4 7D07      		cpc r23,r29
+ 2395 08d6 00F4      		brsh .L127
+ 341:video.c       **** 				{
+ 2396               		.loc 1 341 10 is_stmt 0 view .LVU496
+ 2397 08d8 9A01      		movw r18,r20
+ 2398 08da 2D5E      		subi r18,-19
+ 2399 08dc 3F4F      		sbci r19,-1
+ 2400 08de 2817      		cp r18,r24
+ 2401 08e0 3907      		cpc r19,r25
+ 2402 08e2 00F0      		brlo .L128
+ 2403 08e4 281B      		sub r18,r24
+ 2404 08e6 390B      		sbc r19,r25
+ 2405               	.L129:
+ 352:video.c       **** 				tmp = *src << shift;
+ 2406               		.loc 1 352 5 is_stmt 1 discriminator 2 view .LVU497
+ 2407               	.LVL204:
+ 353:video.c       **** 				*src = 0;
+ 2408               		.loc 1 353 5 discriminator 2 view .LVU498
+ 354:video.c       **** 				*dst = tmp;
+ 2409               		.loc 1 354 5 discriminator 2 view .LVU499
+ 354:video.c       **** 				*dst = tmp;
+ 2410               		.loc 1 354 10 is_stmt 0 discriminator 2 view .LVU500
+ 2411 08e8 EC01      		movw r28,r24
+ 2412               	.LVL205:
+ 354:video.c       **** 				*dst = tmp;
+ 2413               		.loc 1 354 10 discriminator 2 view .LVU501
+ 2414 08ea C20F      		add r28,r18
+ 2415 08ec D31F      		adc r29,r19
+ 2416 08ee 1882      		st Y,__zero_reg__
+ 355:video.c       **** 			}
+ 2417               		.loc 1 355 5 is_stmt 1 discriminator 2 view .LVU502
+ 355:video.c       **** 			}
+ 2418               		.loc 1 355 10 is_stmt 0 discriminator 2 view .LVU503
+ 2419 08f0 240F      		add r18,r20
+ 2420 08f2 351F      		adc r19,r21
+ 353:video.c       **** 				*src = 0;
+ 2421               		.loc 1 353 9 discriminator 2 view .LVU504
+ 2422 08f4 E901      		movw r28,r18
+ 2423 08f6 A883      		st Y,r26
+ 336:video.c       **** 			{
+ 2424               		.loc 1 336 33 is_stmt 1 discriminator 2 view .LVU505
+ 336:video.c       **** 			{
+ 2425               		.loc 1 336 18 discriminator 2 view .LVU506
+ 2426 08f8 4C5E      		subi r20,-20
+ 2427 08fa 5F4F      		sbci r21,-1
+ 2428               	.LVL206:
+ 336:video.c       **** 			{
+ 2429               		.loc 1 336 18 is_stmt 0 discriminator 2 view .LVU507
+ 2430 08fc 4496      		adiw r24,20
+ 2431 08fe 6C5E      		subi r22,-20
+ 2432 0900 7F4F      		sbci r23,-1
+ 336:video.c       **** 			{
+ 2433               		.loc 1 336 4 discriminator 2 view .LVU508
+ 2434 0902 D0E0      		ldi r29,hi8(frame+1920)
+ 2435 0904 4030      		cpi r20,lo8(frame+1920)
+ 2436 0906 5D07      		cpc r21,r29
+ 2437 0908 01F4      		brne .L130
+ 2438 090a 00C0      		rjmp .L114
+ 2439               	.LVL207:
+ 2440               	.L127:
+ 343:video.c       **** 					tmp = *src << shift;
+ 2441               		.loc 1 343 6 is_stmt 1 view .LVU509
+ 344:video.c       **** 					*src = 0;
+ 2442               		.loc 1 344 6 view .LVU510
+ 345:video.c       **** 					++src;
+ 2443               		.loc 1 345 6 view .LVU511
+ 345:video.c       **** 					++src;
+ 2444               		.loc 1 345 11 is_stmt 0 view .LVU512
+ 2445 090c 1992      		st Y+,__zero_reg__
+ 2446               	.LVL208:
+ 346:video.c       **** 					tmp |= *src >> (8 - shift);
+ 2447               		.loc 1 346 6 is_stmt 1 view .LVU513
+ 347:video.c       **** 					*dst = tmp;
+ 2448               		.loc 1 347 6 view .LVU514
+ 348:video.c       **** 					++dst;
+ 2449               		.loc 1 348 6 view .LVU515
+ 347:video.c       **** 					*dst = tmp;
+ 2450               		.loc 1 347 13 is_stmt 0 view .LVU516
+ 2451 090e 2881      		ld r18,Y
+ 2452 0910 30E0      		ldi r19,0
+ 347:video.c       **** 					*dst = tmp;
+ 2453               		.loc 1 347 18 view .LVU517
+ 2454 0912 0E2E      		mov r0,r30
+ 2455 0914 00C0      		rjmp 2f
+ 2456               		1:
+ 2457 0916 3595      		asr r19
+ 2458 0918 2795      		ror r18
+ 2459               		2:
+ 2460 091a 0A94      		dec r0
+ 2461 091c 02F4      		brpl 1b
+ 347:video.c       **** 					*dst = tmp;
+ 2462               		.loc 1 347 10 view .LVU518
+ 2463 091e 2A2B      		or r18,r26
+ 348:video.c       **** 					++dst;
+ 2464               		.loc 1 348 11 view .LVU519
+ 2465 0920 D701      		movw r26,r14
+ 2466               	.LVL209:
+ 348:video.c       **** 					++dst;
+ 2467               		.loc 1 348 11 view .LVU520
+ 2468 0922 2D93      		st X+,r18
+ 348:video.c       **** 					++dst;
+ 2469               		.loc 1 348 11 view .LVU521
+ 2470 0924 7D01      		movw r14,r26
+ 2471               	.LVL210:
+ 349:video.c       **** 				}
+ 2472               		.loc 1 349 6 is_stmt 1 view .LVU522
+ 349:video.c       **** 				}
+ 2473               		.loc 1 349 6 is_stmt 0 view .LVU523
+ 2474 0926 00C0      		rjmp .L126
+ 2475               	.L128:
+ 349:video.c       **** 				}
+ 2476               		.loc 1 349 6 view .LVU524
+ 2477 0928 30E0      		ldi r19,0
+ 2478 092a 20E0      		ldi r18,0
+ 2479 092c 00C0      		rjmp .L129
+ 2480               	.LVL211:
+ 2481               	.L119:
+ 349:video.c       **** 				}
+ 2482               		.loc 1 349 6 view .LVU525
+ 2483               	.LBE13:
+ 2484               	.LBB14:
+ 362:video.c       **** 			shift = distance & 7;
+ 2485               		.loc 1 362 4 is_stmt 1 view .LVU526
+ 363:video.c       **** 			for(line = 0; line < HEIGHT; ++line)
+ 2486               		.loc 1 363 4 view .LVU527
+ 363:video.c       **** 			for(line = 0; line < HEIGHT; ++line)
+ 2487               		.loc 1 363 10 is_stmt 0 view .LVU528
+ 2488 092e E82F      		mov r30,r24
+ 2489 0930 E770      		andi r30,lo8(7)
+ 2490 0932 5E2E      		mov r5,r30
+ 2491               	.LVL212:
+ 364:video.c       **** 			{
+ 2492               		.loc 1 364 4 is_stmt 1 view .LVU529
+ 364:video.c       **** 			{
+ 2493               		.loc 1 364 18 view .LVU530
+ 367:video.c       **** 				end = dst - WIDTH + 2;
+ 2494               		.loc 1 367 26 is_stmt 0 view .LVU531
+ 2495 0934 8695      		lsr r24
+ 2496 0936 8695      		lsr r24
+ 2497 0938 8695      		lsr r24
+ 2498               	.LVL213:
+ 367:video.c       **** 				end = dst - WIDTH + 2;
+ 2499               		.loc 1 367 26 view .LVU532
+ 2500 093a 90E0      		ldi r25,0
+ 2501 093c A0E0      		ldi r26,lo8(frame+19)
+ 2502 093e B0E0      		ldi r27,hi8(frame+19)
+ 2503 0940 40E0      		ldi r20,lo8(frame)
+ 2504 0942 50E0      		ldi r21,hi8(frame)
+ 2505 0944 20E0      		ldi r18,lo8(frame+1)
+ 2506 0946 222E      		mov r2,r18
+ 2507 0948 20E0      		ldi r18,hi8(frame+1)
+ 2508 094a 322E      		mov r3,r18
+ 2509 094c 30E0      		ldi r19,lo8(frame+1920)
+ 2510 094e 832E      		mov r8,r19
+ 2511 0950 30E0      		ldi r19,hi8(frame+1920)
+ 2512 0952 932E      		mov r9,r19
+ 375:video.c       **** 					*dst = tmp;
+ 2513               		.loc 1 375 24 view .LVU533
+ 2514 0954 28E0      		ldi r18,lo8(8)
+ 2515 0956 30E0      		ldi r19,0
+ 2516 0958 3901      		movw r6,r18
+ 2517 095a 6E1A      		sub r6,r30
+ 2518 095c 7108      		sbc r7,__zero_reg__
+ 2519 095e 7C01      		movw r14,r24
+ 2520 0960 F3E1      		ldi r31,19
+ 2521 0962 EF1A      		sub r14,r31
+ 2522 0964 F108      		sbc r15,__zero_reg__
+ 2523               	.LVL214:
+ 2524               	.L135:
+ 366:video.c       **** 				src = dst - distance / 8;
+ 2525               		.loc 1 366 5 is_stmt 1 view .LVU534
+ 367:video.c       **** 				end = dst - WIDTH + 2;
+ 2526               		.loc 1 367 5 view .LVU535
+ 2527 0966 BD01      		movw r22,r26
+ 2528 0968 681B      		sub r22,r24
+ 2529 096a 790B      		sbc r23,r25
+ 2530               	.LVL215:
+ 368:video.c       **** 				while(src >= end)
+ 2531               		.loc 1 368 5 view .LVU536
+ 369:video.c       **** 				{
+ 2532               		.loc 1 369 5 view .LVU537
+ 2533 096c 6A01      		movw r12,r20
+ 2534 096e 4C5E      		subi r20,-20
+ 2535 0970 5F4F      		sbci r21,-1
+ 369:video.c       **** 				{
+ 2536               		.loc 1 369 10 is_stmt 0 view .LVU538
+ 2537 0972 8A01      		movw r16,r20
+ 367:video.c       **** 				end = dst - WIDTH + 2;
+ 2538               		.loc 1 367 9 view .LVU539
+ 2539 0974 FB01      		movw r30,r22
+ 2540               	.LVL216:
+ 2541               	.L131:
+ 369:video.c       **** 				{
+ 2542               		.loc 1 369 10 is_stmt 1 view .LVU540
+ 2543 0976 A080      		ld r10,Z
+ 2544 0978 B12C      		mov r11,__zero_reg__
+ 2545 097a 052C      		mov r0,r5
+ 2546 097c 00C0      		rjmp 2f
+ 2547               		1:
+ 2548 097e B594      		asr r11
+ 2549 0980 A794      		ror r10
+ 2550               		2:
+ 2551 0982 0A94      		dec r0
+ 2552 0984 02F4      		brpl 1b
+ 2553 0986 E215      		cp r30,r2
+ 2554 0988 F305      		cpc r31,r3
+ 2555 098a 00F4      		brsh .L132
+ 369:video.c       **** 				{
+ 2556               		.loc 1 369 10 is_stmt 0 view .LVU541
+ 2557 098c 9701      		movw r18,r14
+ 2558 098e 6C15      		cp r22,r12
+ 2559 0990 7D05      		cpc r23,r13
+ 2560 0992 00F4      		brsh .L134
+ 2561 0994 30E0      		ldi r19,0
+ 2562 0996 20E0      		ldi r18,0
+ 2563               	.L134:
+ 380:video.c       **** 				tmp = *src >> shift;
+ 2564               		.loc 1 380 5 is_stmt 1 discriminator 2 view .LVU542
+ 2565               	.LVL217:
+ 381:video.c       **** 				*src = 0;
+ 2566               		.loc 1 381 5 discriminator 2 view .LVU543
+ 382:video.c       **** 				*dst = tmp;
+ 2567               		.loc 1 382 5 discriminator 2 view .LVU544
+ 382:video.c       **** 				*dst = tmp;
+ 2568               		.loc 1 382 10 is_stmt 0 discriminator 2 view .LVU545
+ 2569 0998 620F      		add r22,r18
+ 2570 099a 731F      		adc r23,r19
+ 2571               	.LVL218:
+ 382:video.c       **** 				*dst = tmp;
+ 2572               		.loc 1 382 10 discriminator 2 view .LVU546
+ 2573 099c FB01      		movw r30,r22
+ 2574               	.LVL219:
+ 382:video.c       **** 				*dst = tmp;
+ 2575               		.loc 1 382 10 discriminator 2 view .LVU547
+ 2576 099e 1082      		st Z,__zero_reg__
+ 383:video.c       **** 			}
+ 2577               		.loc 1 383 5 is_stmt 1 discriminator 2 view .LVU548
+ 383:video.c       **** 			}
+ 2578               		.loc 1 383 10 is_stmt 0 discriminator 2 view .LVU549
+ 2579 09a0 2A0F      		add r18,r26
+ 2580 09a2 3B1F      		adc r19,r27
+ 381:video.c       **** 				*src = 0;
+ 2581               		.loc 1 381 9 discriminator 2 view .LVU550
+ 2582 09a4 E901      		movw r28,r18
+ 2583 09a6 A882      		st Y,r10
+ 364:video.c       **** 			{
+ 2584               		.loc 1 364 33 is_stmt 1 discriminator 2 view .LVU551
+ 364:video.c       **** 			{
+ 2585               		.loc 1 364 18 discriminator 2 view .LVU552
+ 2586 09a8 5496      		adiw r26,20
+ 2587               	.LVL220:
+ 364:video.c       **** 			{
+ 2588               		.loc 1 364 18 is_stmt 0 discriminator 2 view .LVU553
+ 2589 09aa D4E1      		ldi r29,20
+ 2590 09ac 2D0E      		add r2,r29
+ 2591 09ae 311C      		adc r3,__zero_reg__
+ 364:video.c       **** 			{
+ 2592               		.loc 1 364 4 discriminator 2 view .LVU554
+ 2593 09b0 8416      		cp r8,r20
+ 2594 09b2 9506      		cpc r9,r21
+ 2595 09b4 01F4      		brne .L135
+ 2596 09b6 00C0      		rjmp .L114
+ 2597               	.LVL221:
+ 2598               	.L132:
+ 371:video.c       **** 					tmp = *src >> shift;
+ 2599               		.loc 1 371 6 is_stmt 1 view .LVU555
+ 372:video.c       **** 					*src = 0;
+ 2600               		.loc 1 372 6 view .LVU556
+ 373:video.c       **** 					--src;
+ 2601               		.loc 1 373 6 view .LVU557
+ 373:video.c       **** 					--src;
+ 2602               		.loc 1 373 11 is_stmt 0 view .LVU558
+ 2603 09b8 1082      		st Z,__zero_reg__
+ 2604               	.LVL222:
+ 374:video.c       **** 					tmp |= *src << (8 - shift);
+ 2605               		.loc 1 374 6 is_stmt 1 view .LVU559
+ 375:video.c       **** 					*dst = tmp;
+ 2606               		.loc 1 375 6 view .LVU560
+ 376:video.c       **** 					--dst;
+ 2607               		.loc 1 376 6 view .LVU561
+ 375:video.c       **** 					*dst = tmp;
+ 2608               		.loc 1 375 13 is_stmt 0 view .LVU562
+ 2609 09ba 2291      		ld r18,-Z
+ 2610               	.LVL223:
+ 375:video.c       **** 					*dst = tmp;
+ 2611               		.loc 1 375 18 view .LVU563
+ 2612 09bc 062C      		mov r0,r6
+ 2613 09be 00C0      		rjmp 2f
+ 2614               		1:
+ 2615 09c0 220F      		lsl r18
+ 2616               		2:
+ 2617 09c2 0A94      		dec r0
+ 2618 09c4 02F4      		brpl 1b
+ 375:video.c       **** 					*dst = tmp;
+ 2619               		.loc 1 375 10 view .LVU564
+ 2620 09c6 2A29      		or r18,r10
+ 376:video.c       **** 					--dst;
+ 2621               		.loc 1 376 11 view .LVU565
+ 2622 09c8 E801      		movw r28,r16
+ 2623 09ca 2A93      		st -Y,r18
+ 2624               	.LVL224:
+ 376:video.c       **** 					--dst;
+ 2625               		.loc 1 376 11 view .LVU566
+ 2626 09cc 8E01      		movw r16,r28
+ 377:video.c       **** 				}
+ 2627               		.loc 1 377 6 is_stmt 1 view .LVU567
+ 2628               	.LVL225:
+ 377:video.c       **** 				}
+ 2629               		.loc 1 377 6 is_stmt 0 view .LVU568
+ 2630 09ce 00C0      		rjmp .L131
+ 2631               	.LBE14:
+ 2632               		.cfi_endproc
+ 2633               	.LFE16:
+ 2635               	.global	__vector_13
+ 2637               	__vector_13:
+ 2638               	.LFB20:
+ 744:video.c       **** 
+ 745:video.c       **** ISR(TIMER1_OVF_vect)
+ 746:video.c       **** {
+ 2639               		.loc 1 746 1 is_stmt 1 view -0
+ 2640               		.cfi_startproc
+ 2641 09d0 1F92      		push r1
+ 2642               	.LCFI96:
+ 2643               		.cfi_def_cfa_offset 3
+ 2644               		.cfi_offset 1, -2
+ 2645 09d2 0F92      		push r0
+ 2646               	.LCFI97:
+ 2647               		.cfi_def_cfa_offset 4
+ 2648               		.cfi_offset 0, -3
+ 2649 09d4 0FB6      		in r0,__SREG__
+ 2650 09d6 0F92      		push r0
+ 2651 09d8 1124      		clr __zero_reg__
+ 2652 09da 2F93      		push r18
+ 2653               	.LCFI98:
+ 2654               		.cfi_def_cfa_offset 5
+ 2655               		.cfi_offset 18, -4
+ 2656 09dc 3F93      		push r19
+ 2657               	.LCFI99:
+ 2658               		.cfi_def_cfa_offset 6
+ 2659               		.cfi_offset 19, -5
+ 2660 09de 4F93      		push r20
+ 2661               	.LCFI100:
+ 2662               		.cfi_def_cfa_offset 7
+ 2663               		.cfi_offset 20, -6
+ 2664 09e0 5F93      		push r21
+ 2665               	.LCFI101:
+ 2666               		.cfi_def_cfa_offset 8
+ 2667               		.cfi_offset 21, -7
+ 2668 09e2 6F93      		push r22
+ 2669               	.LCFI102:
+ 2670               		.cfi_def_cfa_offset 9
+ 2671               		.cfi_offset 22, -8
+ 2672 09e4 7F93      		push r23
+ 2673               	.LCFI103:
+ 2674               		.cfi_def_cfa_offset 10
+ 2675               		.cfi_offset 23, -9
+ 2676 09e6 8F93      		push r24
+ 2677               	.LCFI104:
+ 2678               		.cfi_def_cfa_offset 11
+ 2679               		.cfi_offset 24, -10
+ 2680 09e8 9F93      		push r25
+ 2681               	.LCFI105:
+ 2682               		.cfi_def_cfa_offset 12
+ 2683               		.cfi_offset 25, -11
+ 2684 09ea AF93      		push r26
+ 2685               	.LCFI106:
+ 2686               		.cfi_def_cfa_offset 13
+ 2687               		.cfi_offset 26, -12
+ 2688 09ec BF93      		push r27
+ 2689               	.LCFI107:
+ 2690               		.cfi_def_cfa_offset 14
+ 2691               		.cfi_offset 27, -13
+ 2692 09ee EF93      		push r30
+ 2693               	.LCFI108:
+ 2694               		.cfi_def_cfa_offset 15
+ 2695               		.cfi_offset 30, -14
+ 2696 09f0 FF93      		push r31
+ 2697               	.LCFI109:
+ 2698               		.cfi_def_cfa_offset 16
+ 2699               		.cfi_offset 31, -15
+ 2700               	/* prologue: Signal */
+ 2701               	/* frame size = 0 */
+ 2702               	/* stack size = 15 */
+ 2703               	.L__stack_usage = 15
+ 747:video.c       **** 	line_handler();
+ 2704               		.loc 1 747 2 view .LVU570
+ 2705 09f2 E091 0000 		lds r30,line_handler
+ 2706 09f6 F091 0000 		lds r31,line_handler+1
+ 2707 09fa 0995      		icall
+ 2708               	.LVL226:
+ 2709               	/* epilogue start */
+ 748:video.c       **** }
+ 2710               		.loc 1 748 1 is_stmt 0 view .LVU571
+ 2711 09fc FF91      		pop r31
+ 2712 09fe EF91      		pop r30
+ 2713 0a00 BF91      		pop r27
+ 2714 0a02 AF91      		pop r26
+ 2715 0a04 9F91      		pop r25
+ 2716 0a06 8F91      		pop r24
+ 2717 0a08 7F91      		pop r23
+ 2718 0a0a 6F91      		pop r22
+ 2719 0a0c 5F91      		pop r21
+ 2720 0a0e 4F91      		pop r20
+ 2721 0a10 3F91      		pop r19
+ 2722 0a12 2F91      		pop r18
+ 2723 0a14 0F90      		pop r0
+ 2724 0a16 0FBE      		out __SREG__,r0
+ 2725 0a18 0F90      		pop r0
+ 2726 0a1a 1F90      		pop r1
+ 2727 0a1c 1895      		reti
+ 2728               		.cfi_endproc
+ 2729               	.LFE20:
+ 2731               		.comm	line_handler,2,1
+ 2732               	.global	video_color
+ 2733               		.section .bss
+ 2736               	video_color:
+ 2737 0000 00        		.zero	1
+ 2738               		.comm	output_delay,1,1
+ 2739               		.comm	start_render,1,1
+ 2740               		.comm	frame,1920,1
+ 2741               		.comm	vsync_end,1,1
+ 2742               		.comm	vscale,1,1
+ 2743               		.comm	vscale_const,1,1
+ 2744               		.comm	lines_frame,2,1
+ 2745               		.comm	renderLine,2,1
+ 2746               		.comm	scanLine,2,1
+ 2747               		.text
+ 2748               	.Letext0:
+ 2749               		.file 2 "/usr/avr/include/stdint.h"
+DEFINED SYMBOLS
+                            *ABS*:0000000000000000 video.c
+     /tmp/ccxUE8yk.s:2      *ABS*:000000000000003e __SP_H__
+     /tmp/ccxUE8yk.s:3      *ABS*:000000000000003d __SP_L__
+     /tmp/ccxUE8yk.s:4      *ABS*:000000000000003f __SREG__
+     /tmp/ccxUE8yk.s:5      *ABS*:0000000000000000 __tmp_reg__
+     /tmp/ccxUE8yk.s:6      *ABS*:0000000000000001 __zero_reg__
+     /tmp/ccxUE8yk.s:11     .text:0000000000000000 blank_line
+                            *COM*:0000000000000002 scanLine
+                            *COM*:0000000000000001 start_render
+                            *COM*:0000000000000002 renderLine
+                            *COM*:0000000000000001 vscale_const
+                            *COM*:0000000000000001 vscale
+     /tmp/ccxUE8yk.s:140    .text:00000000000000c8 active_line
+                            *COM*:0000000000000002 line_handler
+                            *COM*:0000000000000002 lines_frame
+     /tmp/ccxUE8yk.s:75     .text:000000000000005e vsync_line
+                            *COM*:0000000000000001 vsync_end
+                            *COM*:0000000000000001 output_delay
+                            *COM*:0000000000000780 frame
+     /tmp/ccxUE8yk.s:198    .text:0000000000000104 enter4
+     /tmp/ccxUE8yk.s:195    .text:0000000000000100 loop4
+     /tmp/ccxUE8yk.s:304    .text:00000000000001b6 abs
+     /tmp/ccxUE8yk.s:330    .text:00000000000001c2 video_begin
+     /tmp/ccxUE8yk.s:467    .text:000000000000026c video_sp
+     /tmp/ccxUE8yk.s:2736   .bss:0000000000000000 video_color
+     /tmp/ccxUE8yk.s:611    .text:000000000000030e video_set_color
+     /tmp/ccxUE8yk.s:631    .text:0000000000000314 video_set_pixel
+     /tmp/ccxUE8yk.s:667    .text:0000000000000322 video_get_pixel
+     /tmp/ccxUE8yk.s:731    .text:0000000000000364 video_clear
+     /tmp/ccxUE8yk.s:806    .text:00000000000003a0 video_rect
+     /tmp/ccxUE8yk.s:922    .text:00000000000003f8 video_circle
+     /tmp/ccxUE8yk.s:1234   .text:000000000000052e video_hline
+     /tmp/ccxUE8yk.s:1307   .text:0000000000000560 video_vline
+     /tmp/ccxUE8yk.s:1380   .text:0000000000000592 video_line
+     /tmp/ccxUE8yk.s:1710   .text:00000000000006c6 video_char
+     /tmp/ccxUE8yk.s:1908   .text:0000000000000762 video_string
+     /tmp/ccxUE8yk.s:1981   .text:0000000000000790 video_bitmap
+     /tmp/ccxUE8yk.s:2140   .text:0000000000000802 video_shift
+     /tmp/ccxUE8yk.s:2637   .text:00000000000009d0 __vector_13
+
+UNDEFINED SYMBOLS
+font5x7
+__do_clear_bss
